@@ -3,7 +3,8 @@
 embed_text.py — 将校对文本写入扫描 PDF（生成可搜索 PDF）
 """
 
-import sys, json, io, os, platform, traceback
+import sys, json, io, os, platform, subprocess, traceback
+
 
 def find_fonts():
     s = platform.system()
@@ -12,13 +13,38 @@ def find_fonts():
                 '/System/Library/Fonts/STHeiti Light.ttc',
                 '/System/Library/Fonts/Hiragino Sans GB.ttc']
     if s == 'Linux':
-        return ['/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc',
-                '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc',
-                '/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc',
-                '/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc',
-                '/usr/share/fonts/truetype/wqy/wqy-microhei.ttc',
-                '/usr/share/fonts/wqy-microhei/wqy-microhei.ttc',
-                '/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc']
+        # 先用 fc-list 找系统已安装的中文字体
+        try:
+            r = subprocess.run(
+                ['fc-list', ':lang=zh', 'file'],
+                capture_output=True, text=True, timeout=5
+            )
+            if r.returncode == 0 and r.stdout.strip():
+                found = []
+                for line in r.stdout.strip().split('\n'):
+                    fp = line.split(':')[0].strip()
+                    if fp and os.path.exists(fp):
+                        found.append(fp)
+                if found:
+                    print(f'fc-list found {len(found)} CJK fonts')
+                    return found
+        except Exception:
+            pass
+
+        # fc-list 失败则硬编码常见路径
+        return [
+            '/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc',
+            '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc',
+            '/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc',
+            '/usr/share/fonts/truetype/noto/NotoSansCJKsc-Regular.otf',
+            '/usr/share/fonts/opentype/noto/NotoSansCJKsc-Regular.otf',
+            '/usr/share/fonts/noto-cjk/NotoSansCJKsc-Regular.otf',
+            '/usr/share/fonts/truetype/wqy/wqy-microhei.ttc',
+            '/usr/share/fonts/wqy-microhei/wqy-microhei.ttc',
+            '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
+            '/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc',
+        ]
+
     return ['C:/Windows/Fonts/msyh.ttc',
             'C:/Windows/Fonts/simsun.ttc',
             'C:/Windows/Fonts/simhei.ttf']
@@ -55,20 +81,23 @@ def main():
     # 注册字体
     font_name = 'ZhFont'
     font_found = False
-    for fp in find_fonts():
+    candidates = find_fonts()
+
+    for fp in candidates:
         if not fp or not os.path.exists(fp):
             continue
         try:
             pdfmetrics.registerFont(TTFont(font_name, fp))
-            print(f'Font: {fp}')
+            print(f'Font OK: {fp}')
             font_found = True
             break
         except Exception as e:
-            print(f'Font skip {fp}: {e}')
+            print(f'Font skip: {fp} -> {e}')
             continue
 
     if not font_found:
-        print('ERROR: No CJK font found', file=sys.stderr)
+        print('ERROR: No CJK font found. Install fonts-noto-cjk or pass --font', file=sys.stderr)
+        print(f'Searched: {candidates}', file=sys.stderr)
         sys.exit(1)
 
     with open(json_path, 'r', encoding='utf-8') as f:
