@@ -55,31 +55,72 @@ async function loadPDF(fileOrUrl, skipExtract) {
 async function uploadPDFToServer(file) {
   try {
     var buf = await file.arrayBuffer();
-    var resp = await fetch('/api/upload-pdf?name=' + encodeURIComponent(file.name), { method: 'POST', body: buf });
-    var data = await resp.json();
-    console.log('[zhubi] upload:', data);
-  } catch (e) {
-    console.error('[zhubi] upload error:', e);
-  }
+    await fetch('/api/upload-pdf?name=' + encodeURIComponent(file.name), { method: 'POST', body: buf });
+  } catch (e) { console.error('[zhubi] upload error:', e); }
 }
 
+/* ---- 从 pdfjsLib 提取每页每行的 y 坐标和字号 ---- */
+function getPageLayout(pageNum) {
+  if (!S.pageContentItems) return null;
+  var pageData = S.pageContentItems[pageNum - 1];
+  if (!pageData || !pageData.items.length) return null;
+
+  var items = pageData.items;
+
+  // 按 y 坐标分行
+  var lineMap = []; // [{y, fs_sum, count}]
+  for (var i = 0; i < items.length; i++) {
+    var it = items[i];
+    var y = it.y;
+    var found = false;
+    for (var j = 0; j < lineMap.length; j++) {
+      if (Math.abs(lineMap[j].y - y) < (it.h || 4) * 0.5) {
+        lineMap[j].fs_sum += (it.h || 4);
+        lineMap[j].count++;
+        found = true;
+        break;
+      }
+    }
+    if (!found) {
+      lineMap.push({ y: y, fs_sum: (it.h || 4), count: 1 });
+    }
+  }
+
+  // 从上到下排序（pdfjsLib y 是从底部向上的，所以要 reverse）
+  lineMap.sort(function (a, b) { return b.y - a.y; });
+
+  var layout = [];
+  for (var k = 0; k < lineMap.length; k++) {
+    layout.push({
+      y: Math.round(lineMap[k].y * 10) / 10,
+      fs: Math.round(lineMap[k].fs_sum / lineMap[k].count * 10) / 10
+    });
+  }
+  return layout;
+}
+
+/* ---- 写回 PDF ---- */
 async function saveAndReload() {
   if (!S.serverOk) { toast('请先启动 python server.py'); return; }
   if (!S.pageMap || !S.pageMap.length) { toast('需要先完成页码映射'); return; }
   if (S._writing) { toast('正在写入中，请勿重复操作'); return; }
 
   var pages = {};
+  var layouts = {};
   for (var i = 0; i < S.pageMap.length; i++) {
     var r = S.pageMap[i];
     var text = el.editor.value.substring(r.textStart, r.textEnd).trim();
-    if (text) pages[String(r.page)] = text;
+    if (text) {
+      pages[String(r.page)] = text;
+      var layout = getPageLayout(r.page);
+      if (layout) layouts[String(r.page)] = layout;
+    }
   }
   var pageCount = Object.keys(pages).length;
   if (!pageCount) { toast('没有可写入的文本'); return; }
 
-  console.log('[zhubi] saveAndReload:', S.fname, pageCount, 'pages');
+  console.log('[zhubi] saveAndReload:', S.fname, pageCount, 'pages,', Object.keys(layouts).length, 'layouts');
 
-  /* 锁定 */
   S._writing = true;
   var overlay = $('progressOverlay');
   var bar = $('progressBar');
@@ -94,7 +135,6 @@ async function saveAndReload() {
   var beforeUnload = function (e) { e.preventDefault(); e.returnValue = ''; };
   window.addEventListener('beforeunload', beforeUnload);
 
-  /* 轮询进度 */
   var pollTimer = setInterval(async function () {
     try {
       var resp = await fetch('/api/progress');
@@ -112,7 +152,7 @@ async function saveAndReload() {
     var resp = await fetch('/api/save', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: S.fname, pages: pages })
+      body: JSON.stringify({ name: S.fname, pages: pages, layouts: layouts })
     });
     var data = await resp.json();
     console.log('[zhubi] save result:', data);
@@ -130,22 +170,20 @@ async function saveAndReload() {
       return;
     }
 
-    /* 写入成功 → 重新加载 PDF + 重新提取文本 */
-    if (title) title.textContent = '正在刷新并验证…';
+    // 刷新 PDF
+    if (title) title.textContent = '正在刷新…';
     if (bar) bar.style.width = '100%';
     if (detail) detail.textContent = '重新加载 PDF…';
 
-    /* 重新加载（不清空编辑器） */
-    var pdfUrl = data.url + '?t=' + Date.now();
+    var pdfUrl = data.url + '?v=' + Date.now();
     var pdfResp = await fetch(pdfUrl);
-    if (!pdfResp.ok) throw new Error('PDF reload failed: HTTP ' + pdfResp.status);
+    if (!pdfResp.ok) throw new Error('PDF reload HTTP ' + pdfResp.status);
     var buf = await pdfResp.arrayBuffer();
     var scrollPos = el.pdfVp.scrollTop;
 
     S.pdf = await pdfjsLib.getDocument({ data: buf }).promise;
     S.pageTexts = await cachePageTexts();
 
-    /* 清除已渲染 canvas，触发重新渲染 */
     for (var j = 0; j < pageSlots.length; j++) {
       pageSlots[j].dataset.rendered = '';
       var cv = pageSlots[j].querySelector('canvas');
@@ -153,42 +191,20 @@ async function saveAndReload() {
     }
     el.pdfVp.scrollTop = scrollPos;
     renderSlot(S.pg);
+    rebuildMap();
 
-    /* 重新提取文本层以验证 */
-    if (detail) detail.textContent = '正在提取验证…';
-    var oldText = el.editor.value;
-    var newExtracted = await extractTextLayer();
-
-    if (newExtracted) {
-      /* 对比校验 */
-      var oldLines = oldText.split('\n').filter(function (l) { return l.trim(); }).length;
-      var newLines = newExtracted.split('\n').filter(function (l) { return l.trim(); }).length;
-      console.log('[zhubi] verify: old lines=' + oldLines + ', new lines=' + newLines);
-
-      /* 更新编辑器为提取后的内容 */
-      el.editor.value = newExtracted;
-      updateMeta(); rebuildMap(); schedulePreview();
-
-      if (title) title.textContent = '写入完成 ✓';
-      if (detail) detail.textContent = '已验证: ' + newLines + ' 行文本已写入';
-      status('写入完成 · ' + pageCount + ' 页 · 已验证');
-      toast('PDF 已更新并验证');
-    } else {
-      if (title) title.textContent = '写入完成';
-      if (detail) detail.textContent = '但未提取到文本层';
-      status('写入完成 · ' + pageCount + ' 页');
-      toast('PDF 已更新（无文本层）');
-    }
-
+    if (title) title.textContent = '写入完成 ✓';
+    if (detail) detail.textContent = '已处理 ' + pageCount + ' 页 · PDF 已更新';
+    status('写入完成 · ' + pageCount + ' 页');
+    toast('PDF 已更新');
     setTimeout(function () { if (overlay) overlay.style.display = 'none'; }, 1500);
 
   } catch (e) {
     clearInterval(pollTimer);
-    console.error('[zhubi] saveAndReload error:', e);
-    if (title) title.textContent = '连接失败';
+    console.error('[zhubi] save error:', e);
+    if (title) title.textContent = '失败';
     if (detail) detail.textContent = e.message;
-    toast('连接失败: ' + e.message);
-    status('请确保 server.py 正在运行');
+    toast('失败: ' + e.message);
     setTimeout(function () { if (overlay) overlay.style.display = 'none'; }, 4000);
   }
 
