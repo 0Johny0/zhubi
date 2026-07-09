@@ -16,7 +16,6 @@ function initDrop(zone, input, accept, handler) {
   zone.addEventListener('click', function () { input.click(); });
 }
 
-/* ---- 分栏拖拽 ---- */
 var splitDrag = false, resizing = false;
 el.splitHandle.addEventListener('mousedown', function (e) {
   splitDrag = true; document.body.style.cursor = 'row-resize';
@@ -43,7 +42,6 @@ document.addEventListener('mouseup', function () {
   if (resizing) { resizing = false; el.resizer.classList.remove('active'); document.body.style.cursor = ''; document.body.style.userSelect = ''; }
 });
 
-/* ---- 工具栏 ---- */
 el.pdfInput.addEventListener('change', function (e) { if (e.target.files[0]) loadPDF(e.target.files[0]); e.target.value = ''; });
 $('btnPdf').addEventListener('click', function () { el.pdfInput.click(); });
 $('btnPrev').addEventListener('click', function () { go(-1); });
@@ -73,7 +71,6 @@ $('btnSync').addEventListener('click', function () {
   toast(S.syncOn ? '同步已开启' : '同步已关闭');
 });
 
-/* ---- 编辑器事件 ---- */
 var _inputRebuildTimer;
 el.editor.addEventListener('input', function () {
   updateMeta(); save(); schedulePreview(); clearHighlights();
@@ -125,7 +122,6 @@ document.addEventListener('keydown', function (e) {
   if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); saveAndReload(); }
 });
 
-/* ---- 面板拖放 ---- */
 el.pdfPanel.addEventListener('dragover', function (e) { e.preventDefault(); });
 el.pdfPanel.addEventListener('drop', function (e) {
   e.preventDefault();
@@ -141,10 +137,8 @@ el.textPanel.addEventListener('drop', function (e) {
   else if (f) toast('请拖入 PDF 文件');
 });
 
-/* ---- 文本区占位符也触发 PDF 加载 ---- */
 el.dzTxt.addEventListener('click', function () { el.pdfInput.click(); });
 
-/* ---- 服务器检测 ---- */
 async function detectServer() {
   try {
     var resp = await fetch('/api/status', { signal: AbortSignal.timeout(1500) });
@@ -160,6 +154,5 @@ async function detectServer() {
   }
 }
 
-/* ---- 启动 ---- */
 initDrop(el.dzPdf, el.pdfInput, /\.pdf$/i, loadPDF);
 initToolbar(); initCapture(); restore(); detectServer();
