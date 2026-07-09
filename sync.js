@@ -35,7 +35,6 @@ function updateMapUI() {
   renderPageStrip();
 }
 
-/* ---- 显式标记 ---- */
 function buildPageMap(text) {
   if (!text || !text.trim()) return null;
   var pats = [
@@ -62,7 +61,6 @@ function buildPageMap(text) {
   return null;
 }
 
-/* ---- 智能对齐 ---- */
 function buildAlignedMap(mdText) {
   if (!S.pageTexts || !mdText.trim()) return null;
   var mdLen = mdText.length;
@@ -171,7 +169,6 @@ function buildPropMap(text, np) {
   return { regions: r, detected: false };
 }
 
-/* ---- 页码条 ---- */
 function renderPageStrip() {
   var ps = el.pageStrip;
   if (!S.pageMap || !S.pageMap.length || !S.pdf) { ps.style.display = 'none'; return; }
@@ -201,7 +198,6 @@ function updateVpOverlay() {
   vp.style.height = Math.max(6, act.clientHeight * ratio) + 'px';
 }
 
-/* ---- 滚动 ---- */
 function scrollToTextPage(pn) {
   if (!S.pageMap) return;
   var region = null;
@@ -236,7 +232,7 @@ function onPdfScroll() {
     var np = calcPage();
     if (np !== S.pg) {
       S.pg = np; el.pgInput.value = np; updatePgOverlay(); renderPageStrip();
-      if (S.syncOn) { scrollToTextPage(np); }
+      if (S.syncOn) { lockSync(1000); scrollToTextPage(np); }
     }
   });
 }
@@ -282,7 +278,6 @@ function flashSync(m) {
   clearTimeout(flashSync._t); flashSync._t = setTimeout(function () { el.syncBanner.classList.remove('show'); }, 1200);
 }
 
-/* ---- 选区高亮 ---- */
 var _selTimer;
 function debouncedHighlight() { clearTimeout(_selTimer); _selTimer = setTimeout(handleEditorSelection, 80); }
 
