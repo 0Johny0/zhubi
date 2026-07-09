@@ -193,7 +193,7 @@ async function loadFileList() {
     el.fpBody.querySelectorAll('.fp-item').forEach(function (item) {
       item.addEventListener('click', function () {
         if (el.filePicker) el.filePicker.style.display = 'none';
-        loadPDF('/data/' + encodeURIComponent(item.dataset.name));
+        loadPDF('/data/' + encodeURIComponent(item.dataset.name) + '?t=' + Date.now());
       });
     });
   } catch (e) {
