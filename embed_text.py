@@ -83,7 +83,6 @@ def main():
 
     pdf_path, json_path, output_path = sys.argv[1], sys.argv[2], sys.argv[3]
 
-    # 解析 --progress 参数
     progress_path = None
     if '--progress' in sys.argv:
         idx = sys.argv.index('--progress')
@@ -189,8 +188,22 @@ def main():
                 if done % 10 == 0:
                     write_progress(done, total_pages)
 
-    print('Compressing...')
-    writer.compress_identical_objects(remove_identicals=True, remove_orphans=True)
+    # 压缩：安全调用，失败不影响输出
+    try:
+        writer.compress_identical_objects(
+            remove_duplicates=True,
+            remove_unreferenced=True
+        )
+        print('Compressed OK')
+    except Exception as e:
+        print(f'Compress skipped: {e}')
+        # 备选：只做基础压缩
+        try:
+            for page in writer.pages:
+                page.compress_content_streams()
+            print('Content streams compressed')
+        except Exception as e2:
+            print(f'Stream compress skipped: {e2}')
 
     with open(output_path, 'wb') as f:
         writer.write(f)
