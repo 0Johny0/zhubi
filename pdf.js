@@ -57,7 +57,6 @@ async function uploadPDFToServer(file) {
   } catch (e) { }
 }
 
-/* ---- 写回 PDF ---- */
 async function saveAndReload() {
   if (!S.serverOk) { toast('请先启动 python server.py'); return; }
   if (!S.pageMap || !S.pageMap.length) { toast('需要先完成页码映射'); return; }
@@ -120,7 +119,6 @@ function exportTextData() {
   toast('已导出 JSON');
 }
 
-/* ---- 连续滚动 ---- */
 async function buildContinuousLayout() {
   var GAP = 14, PAD = 24, top = PAD;
   el.scrollWrap.querySelectorAll('.page-slot').forEach(function (s) { s.remove(); });
