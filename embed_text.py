@@ -78,14 +78,23 @@ def _strip_stream(stream):
 
 def main():
     if len(sys.argv) < 4:
-        print('Usage: embed_text.py <input.pdf> <pages.json> <output.pdf>', file=sys.stderr)
+        print('Usage: embed_text.py <input.pdf> <pages.json> <output.pdf> [--progress path]', file=sys.stderr)
         sys.exit(1)
 
     pdf_path, json_path, output_path = sys.argv[1], sys.argv[2], sys.argv[3]
 
+    # 解析 --progress 参数
+    progress_path = None
+    if '--progress' in sys.argv:
+        idx = sys.argv.index('--progress')
+        if idx + 1 < len(sys.argv):
+            progress_path = sys.argv[idx + 1]
+
     print(f'Input:  {pdf_path}')
     print(f'JSON:   {json_path}')
     print(f'Output: {output_path}')
+    if progress_path:
+        print(f'Progress: {progress_path}')
 
     if not os.path.exists(pdf_path):
         print(f'ERROR: PDF not found', file=sys.stderr); sys.exit(1)
@@ -114,22 +123,28 @@ def main():
         text_data = json.load(f)
     print(f'Pages to embed: {len(text_data)}')
 
+    def write_progress(done, total, finished=False):
+        if not progress_path: return
+        try:
+            with open(progress_path, 'w') as f:
+                json.dump({'done': done, 'total': total, 'finished': finished}, f)
+        except Exception:
+            pass
+
     reader = PdfReader(pdf_path)
     writer = PdfWriter()
 
-    # 先克隆全部页面（保留图片但不复制文字资源）
     for page in reader.pages:
         writer.add_page(page)
 
-    # 创建字体资源，所有页面共用
-    font_obj = None
-
+    total_pages = len(text_data)
     done = 0
+    write_progress(0, total_pages)
+
     for i, page in enumerate(writer.pages):
         pn = str(i + 1)
         if pn in text_data and text_data[pn].strip():
             try:
-                # 删除原有文字层
                 strip_text_from_page(page)
 
                 mb = page.mediabox
@@ -139,7 +154,6 @@ def main():
                 fs = max(6, fs)
                 lh = fs * 2.0
 
-                # 构建文字叠加 PDF（单页）
                 pkt = io.BytesIO()
                 c = canvas.Canvas(pkt, pagesize=(w, h))
                 c.setFont(font_name, fs)
@@ -162,22 +176,26 @@ def main():
 
                 c.save()
                 pkt.seek(0)
-                overlay_reader = PdfReader(pkt)
-                page.merge_page(overlay_reader.pages[0])
+                page.merge_page(PdfReader(pkt).pages[0])
                 done += 1
 
-                if (i + 1) % 50 == 0:
-                    print(f'  Progress: {i+1}/{len(writer.pages)}')
+                if done % 10 == 0 or done == total_pages:
+                    write_progress(done, total_pages)
+                    print(f'  Progress: {done}/{total_pages}')
             except Exception as e:
                 print(f'  Page {pn} error: {e}')
                 traceback.print_exc()
+                done += 1
+                if done % 10 == 0:
+                    write_progress(done, total_pages)
 
-    # 压缩：去除重复对象（图片、字体等）
     print('Compressing...')
     writer.compress_identical_objects(remove_identicals=True, remove_orphans=True)
 
     with open(output_path, 'wb') as f:
         writer.write(f)
+
+    write_progress(total_pages, total_pages, finished=True)
 
     input_size = os.path.getsize(pdf_path) / 1048576
     output_size = os.path.getsize(output_path) / 1048576
