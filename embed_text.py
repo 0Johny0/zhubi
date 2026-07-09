@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-embed_text.py — 在原文字层上叠加校对文本（保留原始位置用于高亮同步）
+embed_text.py — 删除旧文字层 + 用旧坐标写入校对文本
 """
 
 import sys, json, io, os, re, platform, subprocess, traceback
@@ -49,6 +49,79 @@ def load_font(font_name, fp):
     except Exception as e:
         print(f'Font FAIL: {fp} -> {e}')
         return False
+
+
+def get_line_y_positions(page):
+    """提取旧文字层每行的 y 坐标（从上到下排序）"""
+    # 方法1: pypdf visitor API
+    try:
+        raw_y = []
+        def visitor(text, cm, tm, font_dict, font_size):
+            if text.strip():
+                raw_y.append(round(tm[5], 1))
+        page.extract_text(visitor_text=visitor)
+        if len(raw_y) > 3:
+            unique = sorted(set(raw_y), reverse=True)
+            return unique
+    except Exception:
+        pass
+
+    # 方法2: 正则解析 content stream
+    try:
+        from pypdf.generic import ArrayObject
+        contents = page['/Contents']
+        streams = []
+        if isinstance(contents, ArrayObject):
+            for ref in contents:
+                try: streams.append(ref.get_object().get_data())
+                except: pass
+        else:
+            obj = contents.get_object() if hasattr(contents, 'get_object') else contents
+            try: streams.append(obj.get_data())
+            except: pass
+
+        y_set = set()
+        for data in streams:
+            text = data.decode('latin-1', errors='replace')
+            text = re.sub(r'$$[^)]*$$', '', text)
+            for m in re.finditer(
+                r'[\d.\-]+ +[\d.\-]+ +[\d.\-]+ +[\d.\-]+ +([\d.\-]+) +([\d.\-]+)\s+Tm',
+                text
+            ):
+                try:
+                    y = float(m.group(2))
+                    if 0 < y < 5000:
+                        y_set.add(round(y, 1))
+                except ValueError:
+                    pass
+        return sorted(y_set, reverse=True)
+    except Exception:
+        return []
+
+
+def strip_text_from_page(page):
+    try:
+        contents = page['/Contents']
+    except KeyError:
+        return
+    from pypdf.generic import ArrayObject
+    if isinstance(contents, ArrayObject):
+        for ref in contents:
+            _strip_stream(ref.get_object())
+    else:
+        obj = contents.get_object() if hasattr(contents, 'get_object') else contents
+        _strip_stream(obj)
+
+
+def _strip_stream(stream):
+    try:
+        data = stream.get_data()
+        text = data.decode('latin-1', errors='replace')
+        cleaned = re.sub(r'\bBT\b.*?\bET\b', '', text, flags=re.DOTALL)
+        cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
+        stream.set_data(cleaned.encode('latin-1'))
+    except Exception as e:
+        print(f'  Strip warning: {e}')
 
 
 def main():
@@ -115,42 +188,65 @@ def main():
             try:
                 mb = page.mediabox
                 w, h = float(mb.width), float(mb.height)
+
+                # ① 在删除之前，提取旧层每行的 y 坐标
+                old_y = get_line_y_positions(page)
+                has_old = len(old_y) > 3
+
+                # ② 删除旧文字层
+                strip_text_from_page(page)
+
+                # ③ 用旧坐标放置新文字
                 lines = text_data[pn].split('\n')
-                fs = min(12, (h - 80) / max(len(lines), 1) / 2.0)
+                non_empty = [l for l in lines if l.strip()]
+                fs = min(12, (h - 80) / max(len(non_empty), 1) / 2.0)
                 fs = max(6, fs)
                 lh = fs * 2.0
 
                 pkt = io.BytesIO()
                 c = canvas.Canvas(pkt, pagesize=(w, h))
                 c.setFont(font_name, fs)
-                y = h - 40
                 max_chars = int((w - 80) / fs * 1.6)
 
+                y_idx = 0  # 旧坐标索引
                 for line in lines:
-                    if y < 30: break
                     s = line.strip()
                     if not s:
-                        y -= lh * 0.4; continue
+                        continue
+
+                    # 确定 y 坐标
+                    if has_old and y_idx < len(old_y):
+                        y = old_y[y_idx]
+                    elif has_old:
+                        # 多余的行 → 在最后一行下方递减
+                        y = old_y[-1] - (y_idx - len(old_y) + 1) * lh
+                    else:
+                        # 无旧坐标 → 均匀分布
+                        y = h - 40 - y_idx * lh
+
+                    y_idx += 1
+                    if y < 20:
+                        break
+
                     c.setFillColorRGB(0, 0, 0, alpha=0)
+                    sub_y = y
                     while len(s) > max_chars:
-                        c.drawString(40, y, s[:max_chars])
-                        s = s[max_chars:]; y -= lh
-                        if y < 30: break
-                    if y >= 30 and s:
-                        c.drawString(40, y, s)
-                    y -= lh
+                        c.drawString(40, sub_y, s[:max_chars])
+                        s = s[max_chars:]
+                        sub_y -= fs * 1.3
+                        if sub_y < 20: break
+                    if sub_y >= 20 and s:
+                        c.drawString(40, sub_y, s)
 
                 c.save()
                 pkt.seek(0)
-
-                # 直接叠加，不删除旧文字层
-                # 旧文字层保留原始坐标 → 高亮同步不失准
                 page.merge_page(PdfReader(pkt).pages[0])
                 done += 1
 
                 if done % 10 == 0 or done == total_pages:
                     write_progress(done, total_pages)
                     print(f'  Progress: {done}/{total_pages}')
+
             except Exception as e:
                 print(f'  Page {pn} error: {e}')
                 traceback.print_exc()
@@ -158,7 +254,7 @@ def main():
                 if done % 10 == 0:
                     write_progress(done, total_pages)
 
-    # 压缩：安全调用
+    # 压缩（安全调用）
     try:
         writer.compress_identical_objects(
             remove_duplicates=True,
