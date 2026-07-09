@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>朱笔 · OCR 校对台</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,wght@0,400;0,500;0,600;1,400&family=Noto+Serif+SC:wght@400;600&family=Playfair+Display:wght@600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+<header class="toolbar">
+  <div class="toolbar-brand">朱笔<small>校对台</small></div>
+  <div class="tb-sep"></div>
+  <div class="tb-group">
+    <button class="btn" id="btnPdf">📄 加载PDF</button>
+    <input type="file" id="pdfInput" class="file-input" accept=".pdf">
+  </div>
+  <div class="tb-sep sep-pg" style="display:none"></div>
+  <div class="tb-group pg-ctrl" id="pgCtrl" style="display:none">
+    <button class="btn btn--sm" id="btnPrev">◀</button>
+    <input type="number" id="pgInput" min="1" value="1">
+    <span class="tot">/ <span id="pgTotal">0</span></span>
+    <button class="btn btn--sm" id="btnNext">▶</button>
+  </div>
+  <div class="tb-spacer"></div>
+  <div class="tb-group" id="zoomGrp" style="display:none">
+    <span class="zoom-label">📄</span>
+    <button class="btn btn--sm" id="btnZout">−</button>
+    <span class="zoom-val" id="zoomVal">100%</span>
+    <button class="btn btn--sm" id="btnZin">+</button>
+    <button class="btn btn--sm" id="btnFit">适应</button>
+  </div>
+  <div class="tb-sep sep-tz" style="display:none"></div>
+  <div class="tb-group" id="textZoomGrp" style="display:none">
+    <span class="zoom-label">📝</span>
+    <button class="btn btn--sm" id="btnTZout">−</button>
+    <span class="zoom-val" id="textZoomVal">100%</span>
+    <button class="btn btn--sm" id="btnTZin">+</button>
+    <button class="btn btn--sm" id="btnTFit">重置</button>
+  </div>
+  <div class="tb-sep sep-cap" style="display:none"></div>
+  <div class="tb-group" id="capGrp" style="display:none">
+    <button class="btn btn--sm" id="btnCapture">📷 截取</button>
+  </div>
+  <div class="tb-sep sep-sync" style="display:none"></div>
+  <div class="tb-group" id="syncGrp" style="display:none">
+    <button class="btn btn--sm btn--active" id="btnSync">🔗 同步</button>
+    <span class="text-meta" id="mapInfo"></span>
+  </div>
+  <div class="tb-sep sep-save" style="display:none"></div>
+  <div class="tb-group" id="saveGrp" style="display:none">
+    <button class="btn" id="btnMarker">📌 标记</button>
+    <button class="btn btn--accent" id="btnWriteBack" style="display:none" title="将校对文本写回 PDF 并刷新">💾 写回PDF</button>
+    <button class="btn" id="btnExportJson" title="导出 JSON（离线可用 embed_text.py）">📦 JSON</button>
+    <button class="btn" id="btnSave">导出 .typ</button>
+  </div>
+</header>
+
+<main class="workspace">
+  <section class="pdf-panel" id="pdfPanel">
+    <div class="page-overlay" id="pgOverlay"></div>
+    <div class="dropzone" id="dzPdf">
+      <div class="dropzone-icon">📑</div>
+      <div class="dropzone-title">加载扫描版 PDF</div>
+      <div class="dropzone-sub">拖放文件至此，或点击选择 · 支持含文本层的 PDF</div>
+    </div>
+    <div class="pdf-viewport" id="pdfVp" style="display:none">
+      <div class="pdf-scroll-wrap" id="scrollWrap"></div>
+    </div>
+    <div class="capture-layer" id="captureLayer">
+      <div class="capture-rect" id="captureRect"></div>
+    </div>
+    <div class="sync-banner" id="syncBanner"></div>
+  </section>
+
+  <div class="resizer" id="resizer"></div>
+
+  <section class="text-panel" id="textPanel">
+    <div class="dropzone" id="dzTxt">
+      <div class="dropzone-icon">📝</div>
+      <div class="dropzone-title">加载扫描 PDF 后自动提取文本</div>
+      <div class="dropzone-sub">校对完成后点击「💾 写回PDF」生成可搜索 PDF</div>
+    </div>
+    <div class="text-header" id="txtHead" style="display:none">
+      <h3>校对内容</h3>
+      <span class="text-meta" id="txtMeta">0 字</span>
+    </div>
+    <div class="md-tbar" id="mdTbar" style="display:none">
+      <button class="btn" data-md="h1" title="一级标题">H₁</button>
+      <button class="btn" data-md="h2" title="页码标记">H₂ 页码</button>
+      <button class="btn" data-md="h3" title="三级标题">H₃</button>
+      <div class="sep"></div>
+      <button class="btn" data-md="bold"><b>B</b></button>
+      <button class="btn" data-md="italic"><i>I</i></button>
+      <button class="btn" data-md="underline"><u>U</u></button>
+      <div class="sep"></div>
+      <button class="btn" data-md="figure" title="图片">🖼</button>
+      <button class="btn" data-md="table" title="表格">⊞</button>
+      <button class="btn" data-md="bib" title="引用">📚</button>
+      <button class="btn" data-md="fn" title="脚注">¹</button>
+      <div class="sep"></div>
+      <button class="btn" data-md="pagebreak" title="分页">⏭</button>
+      <button class="btn" data-md="outline" title="目录">📋</button>
+      <div class="spacer"></div>
+      <div class="md-mode-grp" id="modeGrp">
+        <button class="btn active" data-mode="split">分屏</button>
+        <button class="btn" data-mode="source">源码</button>
+        <button class="btn" data-mode="preview">预览</button>
+      </div>
+    </div>
+    <div class="editor-area mode-source" id="editorArea">
+      <div class="md-source" id="mdSource">
+        <textarea id="editor" spellcheck="false"
+          placeholder="加载 PDF 后自动提取文本&#10;&#10;点击文本 → PDF 跳转&#10;滚动编辑器 → PDF 跟随&#10;选中文字 → PDF 高亮&#10;Ctrl+滚轮 缩放文本"></textarea>
+      </div>
+      <div class="md-split-handle" id="splitHandle"></div>
+      <div class="md-preview-pane" id="mdPreviewPane">
+        <div class="md-body" id="mdPreview"></div>
+      </div>
+      <div class="page-strip" id="pageStrip"></div>
+    </div>
+  </section>
+</main>
+
+<footer class="statusbar">
+  <div><kbd>←</kbd><kbd>→</kbd> 翻页 · <kbd>Ctrl</kbd>+滚轮 缩放 · <kbd>Ctrl</kbd>+<kbd>S</kbd> 写回PDF · <kbd>Esc</kbd> 退出截取</div>
+  <div id="statusR">就绪</div>
+</footer>
+<div class="toast" id="toast"></div>
+<div class="capture-badge" id="capBadge">📷 截取模式 · 拖选 PDF 区域 · Esc 退出</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="state.js"></script>
+<script src="pdf.js"></script>
+<script src="editor.js"></script>
+<script src="sync.js"></script>
+<script src="init.js"></script>
+</body>
+</html>
