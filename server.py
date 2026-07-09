@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
 """
 server.py — 朱笔校对台本地服务
-用法: python server.py
 """
 
 import http.server, json, os, sys, subprocess, shutil
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs
 
-PORT = 8321
+PORT = int(os.environ.get('PORT', 8321))
 BASE = Path(__file__).parent
 DATA = BASE / 'data'
 DATA.mkdir(exist_ok=True)
@@ -39,9 +38,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.send_header('Access-Control-Allow-Headers', 'Content-Type')
         self.end_headers()
 
-    # ---- 上传 PDF ----
     def handle_upload(self):
         name = parse_qs(urlparse(self.path).query).get('name', ['file.pdf'])[0]
+        # 安全：只保留文件名，防止路径穿越
+        name = Path(name).name
         length = int(self.headers.get('Content-Length', 0))
         body = self.rfile.read(length)
         path = DATA / name
@@ -49,7 +49,6 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             f.write(body)
         self.send_json(200, {'ok': True, 'name': name, 'size': len(body)})
 
-    # ---- 写回 PDF ----
     def handle_save(self):
         length = int(self.headers.get('Content-Length', 0))
         try:
@@ -57,7 +56,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         except Exception:
             self.send_json(400, {'error': 'Invalid JSON'}); return
 
-        name = req.get('name', '')
+        name = Path(req.get('name', '')).name
         pages = req.get('pages', {})
         if not name or not pages:
             self.send_json(400, {'error': 'Missing data'}); return
@@ -68,12 +67,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
         base = Path(name).stem
 
-        # 保存校对文本
         json_path = DATA / f'{base}_pages.json'
         with open(json_path, 'w', encoding='utf-8') as f:
             json.dump(pages, f, ensure_ascii=False, indent=2)
 
-        # 运行嵌入脚本
         out_path = DATA / f'{base}_embedded.pdf'
         embed = BASE / 'embed_text.py'
         try:
@@ -87,7 +84,6 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         except subprocess.TimeoutExpired:
             self.send_json(500, {'error': 'Timeout'}); return
 
-        # 替换原始 PDF
         shutil.copy2(out_path, pdf_path)
         if out_path.exists():
             out_path.unlink()
@@ -103,16 +99,16 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def log_message(self, format, *args):
+        # Docker 日志友好格式
+        sys.stderr.write(f"[zhubi] {args[0]}\n")
+
 
 if __name__ == '__main__':
-    print('╔═══════════════════════════════════╗')
-    print('║   朱笔 · OCR 校对台 · 本地服务    ║')
-    print('╚═══════════════════════════════════╝')
-    print(f'  地址 http://localhost:{PORT}')
-    print(f'  数据 {DATA.resolve()}')
-    print('  Ctrl+C 停止\n')
-    httpd = http.server.HTTPServer(('', PORT), Handler)
+    print(f'[zhubi] http://0.0.0.0:{PORT}')
+    print(f'[zhubi] data: {DATA.resolve()}')
+    httpd = http.server.HTTPServer(('0.0.0.0', PORT), Handler)
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
-        print('\n已停止')
+        print('\n[zhubi] stopped')
