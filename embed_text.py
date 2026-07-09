@@ -40,7 +40,7 @@ def load_font(font_name, fp):
                 return True
             except Exception:
                 continue
-        print(f'Font FAIL: {fp} (all subfontIndex exhausted)')
+        print(f'Font FAIL: {fp}')
         return False
     try:
         pdfmetrics.registerFont(TTFont(font_name, fp))
@@ -116,14 +116,21 @@ def main():
 
     reader = PdfReader(pdf_path)
     writer = PdfWriter()
-    done = 0
 
-    for i, page in enumerate(reader.pages):
+    # 先克隆全部页面（保留图片但不复制文字资源）
+    for page in reader.pages:
+        writer.add_page(page)
+
+    # 创建字体资源，所有页面共用
+    font_obj = None
+
+    done = 0
+    for i, page in enumerate(writer.pages):
         pn = str(i + 1)
         if pn in text_data and text_data[pn].strip():
             try:
+                # 删除原有文字层
                 strip_text_from_page(page)
-                print(f'  Page {pn}: stripped')
 
                 mb = page.mediabox
                 w, h = float(mb.width), float(mb.height)
@@ -132,6 +139,7 @@ def main():
                 fs = max(6, fs)
                 lh = fs * 2.0
 
+                # 构建文字叠加 PDF（单页）
                 pkt = io.BytesIO()
                 c = canvas.Canvas(pkt, pagesize=(w, h))
                 c.setFont(font_name, fs)
@@ -154,19 +162,27 @@ def main():
 
                 c.save()
                 pkt.seek(0)
-                page.merge_page(PdfReader(pkt).pages[0])
+                overlay_reader = PdfReader(pkt)
+                page.merge_page(overlay_reader.pages[0])
                 done += 1
-                print(f'  Page {pn}: merged')
+
+                if (i + 1) % 50 == 0:
+                    print(f'  Progress: {i+1}/{len(writer.pages)}')
             except Exception as e:
                 print(f'  Page {pn} error: {e}')
                 traceback.print_exc()
 
-        writer.add_page(page)
+    # 压缩：去除重复对象（图片、字体等）
+    print('Compressing...')
+    writer.compress_identical_objects(remove_identicals=True, remove_orphans=True)
 
     with open(output_path, 'wb') as f:
         writer.write(f)
 
-    print(f'Done: {done}/{len(reader.pages)} pages, {os.path.getsize(output_path)/1048576:.1f} MB')
+    input_size = os.path.getsize(pdf_path) / 1048576
+    output_size = os.path.getsize(output_path) / 1048576
+    print(f'Done: {done}/{len(writer.pages)} pages')
+    print(f'Size: {input_size:.1f} MB -> {output_size:.1f} MB')
 
 
 if __name__ == '__main__':
