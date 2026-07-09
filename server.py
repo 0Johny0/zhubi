@@ -62,30 +62,45 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
         pdf_path = DATA / name
         if not pdf_path.exists():
-            self.send_json(404, {'error': 'PDF not found'}); return
+            self.send_json(404, {'error': 'PDF not found: ' + str(pdf_path)}); return
 
         base = Path(name).stem
 
         json_path = DATA / f'{base}_pages.json'
         with open(json_path, 'w', encoding='utf-8') as f:
             json.dump(pages, f, ensure_ascii=False, indent=2)
+        print(f'[zhubi] JSON saved: {json_path} ({len(pages)} pages)')
 
         out_path = DATA / f'{base}_embedded.pdf'
         embed = BASE / 'embed_text.py'
+
+        if not embed.exists():
+            self.send_json(500, {'error': 'embed_text.py not found at: ' + str(embed)}); return
+
+        cmd = [sys.executable, str(embed), str(pdf_path), str(json_path), str(out_path)]
+        print(f'[zhubi] Running: {" ".join(cmd)}')
+
         try:
-            r = subprocess.run(
-                [sys.executable, str(embed), str(pdf_path), str(json_path), str(out_path)],
-                capture_output=True, text=True, timeout=300, cwd=str(BASE)
-            )
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=300, cwd=str(BASE))
+            print(f'[zhubi] Return code: {r.returncode}')
+            if r.stdout: print(f'[zhubi] stdout: {r.stdout}')
+            if r.stderr: print(f'[zhubi] stderr: {r.stderr}')
+
             if r.returncode != 0:
-                self.send_json(500, {'error': r.stderr or 'Embed failed', 'log': r.stdout})
+                error_detail = r.stderr.strip() or r.stdout.strip() or 'Unknown error'
+                self.send_json(500, {'error': 'Embed failed: ' + error_detail, 'log': r.stdout})
                 return
         except subprocess.TimeoutExpired:
-            self.send_json(500, {'error': 'Timeout'}); return
+            self.send_json(500, {'error': 'Timeout (300s)'}); return
+        except Exception as e:
+            self.send_json(500, {'error': 'Subprocess error: ' + str(e)}); return
+
+        if not out_path.exists():
+            self.send_json(500, {'error': 'Output PDF was not created by embed_text.py'}); return
 
         shutil.copy2(out_path, pdf_path)
-        if out_path.exists():
-            out_path.unlink()
+        out_path.unlink()
+        print(f'[zhubi] PDF updated: {pdf_path}')
 
         self.send_json(200, {'ok': True, 'url': f'/data/{name}', 'log': r.stdout})
 
