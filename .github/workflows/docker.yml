@@ -1,11 +1,10 @@
 name: Build & Push Docker Image
 
 on:
-  # 手动触发（GitHub 页面 Actions → Run workflow）
   workflow_dispatch:
     inputs:
       push:
-        description: '是否推送镜像'
+        description: '推送镜像'
         required: false
         default: 'true'
         type: choice
@@ -13,16 +12,12 @@ on:
           - 'true'
           - 'false'
       tag:
-        description: '镜像标签（留空则用 latest + sha）'
+        description: '自定义标签（可选）'
         required: false
         type: string
 
-  # 仅 tag 推送时自动触发（如 v1.0.0）
   push:
     tags: ['v*']
-
-env:
-  IMAGE_NAME: zhubi
 
 jobs:
   build:
@@ -50,27 +45,27 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Resolve tags
+      - name: Build image name and tags
         id: tags
         run: |
-          OWNER="${{ github.repository_owner }}"
-          IMAGE="ghcr.io/${OWNER,,}/${{ env.IMAGE_NAME }}"
-          TAGS=""
+          # 强制小写
+          OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          IMAGE="ghcr.io/${OWNER}/zhubi"
 
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            # 手动触发
             TAGS="${IMAGE}:latest,${IMAGE}:sha-${GITHUB_SHA::8}"
             if [ -n "${{ inputs.tag }}" ]; then
               TAGS="${TAGS},${IMAGE}:${{ inputs.tag }}"
             fi
           else
-            # tag 推送触发
             VERSION="${GITHUB_REF#refs/tags/v}"
             TAGS="${IMAGE}:latest,${IMAGE}:${VERSION}"
           fi
 
-          echo "value=${TAGS}" >> "$GITHUB_OUTPUT"
-          echo "Tags: ${TAGS}"
+          echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
+          echo "tags=${TAGS}" >> "$GITHUB_OUTPUT"
+          echo "Image: ${IMAGE}"
+          echo "Tags:  ${TAGS}"
 
       - name: Build and push
         uses: docker/build-push-action@v6
