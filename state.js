@@ -11,7 +11,9 @@ var S = {
   captureMode: false, capStart: null, mode: 'source',
   pageTexts: null, pageContentItems: null,
   contentStart: 0,
-  serverOk: false
+  serverOk: false,
+  savedPageTexts: null, 
+  _writing: false  // ← 加这两行
 };
 
 var pageSlots = [], pageDims = [], pageObserver = null;
