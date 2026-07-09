@@ -181,3 +181,16 @@ body::before{content:'';position:fixed;inset:0;
   background:var(--ink);color:var(--surface);padding:.4rem 1rem;border-radius:var(--r);
   font-size:.78rem;font-weight:500;opacity:0;transition:all .25s ease;z-index:1000;pointer-events:none;white-space:nowrap}
 .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+/* 进度遮罩 */
+.progress-overlay{position:fixed;inset:0;background:rgba(30,26,20,.55);
+  z-index:500;display:flex;align-items:center;justify-content:center}
+.progress-card{background:var(--surface);border-radius:12px;padding:2rem 2.5rem;
+  min-width:320px;max-width:420px;text-align:center;box-shadow:var(--sh-lg)}
+.progress-spinner{width:36px;height:36px;margin:0 auto 1rem;
+  border:3px solid var(--border-l);border-top-color:var(--accent);
+  border-radius:50%;animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.progress-title{font-family:var(--f-dis);font-size:1rem;font-weight:600;color:var(--ink);margin-bottom:1rem}
+.progress-bar-wrap{height:6px;background:var(--border-l);border-radius:3px;overflow:hidden;margin-bottom:.6rem}
+.progress-bar{height:100%;background:var(--accent);border-radius:3px;transition:width .3s ease}
+.progress-detail{font-size:.75rem;color:var(--muted)}
