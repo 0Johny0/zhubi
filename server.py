@@ -29,6 +29,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.send_json(200, {'ok': True, 'dir': str(DATA.resolve())})
         elif self.path == '/api/files':
             self.handle_file_list()
+        elif self.path.startswith('/api/progress'):
+            self.handle_progress()
         else:
             super().do_GET()
 
@@ -62,6 +64,18 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.send_json(500, {'error': str(e)}); return
         self.send_json(200, {'files': files, 'dir': str(DATA.resolve())})
 
+    def handle_progress(self):
+        progs = list(DATA.glob('*_progress.json'))
+        if not progs:
+            self.send_json(200, {'done': 0, 'total': 0, 'finished': True}); return
+        prog = max(progs, key=lambda p: p.stat().st_mtime)
+        try:
+            with open(prog, 'r') as f:
+                data = json.load(f)
+            self.send_json(200, data)
+        except Exception:
+            self.send_json(200, {'done': 0, 'total': 0, 'finished': True})
+
     def handle_upload(self):
         name = parse_qs(urlparse(self.path).query).get('name', ['file.pdf'])[0]
         name = Path(name).name
@@ -70,6 +84,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         path = DATA / name
         with open(path, 'wb') as f:
             f.write(body)
+        print(f'[zhubi] Upload: {name} ({length} bytes)')
         self.send_json(200, {'ok': True, 'name': name, 'size': len(body)})
 
     def handle_save(self):
@@ -79,29 +94,53 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         except Exception:
             self.send_json(400, {'error': 'Invalid JSON'}); return
 
-        name = Path(req.get('name', '')).name
+        name = req.get('name', '')
         pages = req.get('pages', {})
+
+        # 清理文件名：取纯文件名，去除路径
+        name = Path(name).name
+
+        print(f'[zhubi] Save request: name="{name}", pages={len(pages)}')
+
         if not name or not pages:
             self.send_json(400, {'error': 'Missing data'}); return
 
+        # 在 /app/data/ 中查找文件
         pdf_path = DATA / name
+        print(f'[zhubi] Looking for: {pdf_path} (exists={pdf_path.exists()})')
+
         if not pdf_path.exists():
-            self.send_json(404, {'error': 'PDF not found: ' + name}); return
+            # 尝试模糊匹配
+            candidates = list(DATA.glob('*.pdf'))
+            print(f'[zhubi] Available PDFs: {[c.name for c in candidates]}')
+            self.send_json(404, {'error': f'PDF not found: {name}'}); return
 
         base = Path(name).stem
+
+        # 保存校对文本
         json_path = DATA / f'{base}_pages.json'
         with open(json_path, 'w', encoding='utf-8') as f:
             json.dump(pages, f, ensure_ascii=False, indent=2)
-        print(f'[zhubi] JSON: {json_path.name} ({len(pages)} pages)')
+
+        # 进度文件
+        progress_path = DATA / f'{base}_progress.json'
+        with open(progress_path, 'w') as f:
+            json.dump({'done': 0, 'total': len(pages), 'finished': False}, f)
+
+        print(f'[zhubi] Embedding: {len(pages)} pages -> {name}')
 
         out_path = DATA / f'{base}_embedded.pdf'
         embed = BASE / 'embed_text.py'
-        cmd = [sys.executable, str(embed), str(pdf_path), str(json_path), str(out_path)]
+        cmd = [
+            sys.executable, str(embed),
+            str(pdf_path), str(json_path), str(out_path),
+            '--progress', str(progress_path)
+        ]
 
         try:
             r = subprocess.run(cmd, capture_output=True, text=True, timeout=600, cwd=str(BASE))
             if r.stdout:
-                for line in r.stdout.strip().split('\n')[-5:]:
+                for line in r.stdout.strip().split('\n'):
                     print(f'[zhubi]   {line}')
             if r.stderr:
                 for line in r.stderr.strip().split('\n')[-3:]:
@@ -117,10 +156,11 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if not out_path.exists():
             self.send_json(500, {'error': 'Output not created'}); return
 
+        # 覆盖原文件
         shutil.copy2(out_path, pdf_path)
         out_path.unlink()
-        if json_path.exists():
-            json_path.unlink()
+        if json_path.exists(): json_path.unlink()
+        if progress_path.exists(): progress_path.unlink()
 
         size_mb = pdf_path.stat().st_size / 1048576
         print(f'[zhubi] Done: {name} ({size_mb:.1f} MB)')
@@ -142,6 +182,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 if __name__ == '__main__':
     print(f'[zhubi] http://0.0.0.0:{PORT}')
     print(f'[zhubi] data: {DATA.resolve()}')
+    # 启动时列出已有 PDF
+    pdfs = list(DATA.glob('*.pdf'))
+    if pdfs:
+        print(f'[zhubi] Found {len(pdfs)} PDF(s):')
+        for p in sorted(pdfs):
+            print(f'[zhubi]   {p.name} ({p.stat().st_size / 1048576:.1f} MB)')
     httpd = http.server.HTTPServer(('0.0.0.0', PORT), Handler)
     try:
         httpd.serve_forever()
