@@ -141,6 +141,16 @@
   <div id="statusR">就绪</div>
 </footer>
 <div class="toast" id="toast"></div>
+<div class="progress-overlay" id="progressOverlay" style="display:none">
+  <div class="progress-card">
+    <div class="progress-spinner"></div>
+    <div class="progress-title" id="progressTitle">正在写入 PDF…</div>
+    <div class="progress-bar-wrap">
+      <div class="progress-bar" id="progressBar" style="width:0%"></div>
+    </div>
+    <div class="progress-detail" id="progressDetail">准备中…</div>
+  </div>
+</div>
 <div class="capture-badge" id="capBadge">📷 截取模式 · 拖选 PDF 区域 · Esc 退出</div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
