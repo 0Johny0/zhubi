@@ -13,6 +13,14 @@ DATA = BASE / 'data'
 DATA.mkdir(exist_ok=True)
 
 
+def shutil_copy(src, dst):
+    while True:
+        chunk = src.read(65536)
+        if not chunk:
+            break
+        dst.write(chunk)
+
+
 class Handler(http.server.SimpleHTTPRequestHandler):
 
     def handle_one_request(self):
@@ -31,6 +39,23 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.handle_file_list()
         elif self.path.startswith('/api/progress'):
             self.handle_progress()
+        elif self.path.startswith('/data/') and '.pdf' in self.path.lower():
+            from urllib.parse import unquote
+            fname = unquote(self.path.split('/data/')[1].split('?')[0])
+            fpath = DATA / fname
+            if fpath.exists():
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/pdf')
+                self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate')
+                self.send_header('Pragma', 'no-cache')
+                self.send_header('Expires', '0')
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.send_header('Content-Length', str(fpath.stat().st_size))
+                self.end_headers()
+                with open(fpath, 'rb') as f:
+                    shutil_copy(f, self.wfile)
+            else:
+                self.send_error(404, 'File not found')
         else:
             super().do_GET()
 
@@ -55,11 +80,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             for f in sorted(DATA.iterdir()):
                 if f.suffix.lower() == '.pdf' and f.is_file():
                     stat = f.stat()
-                    files.append({
-                        'name': f.name,
-                        'size': round(stat.st_size / 1048576, 1),
-                        'mtime': int(stat.st_mtime)
-                    })
+                    files.append({'name': f.name, 'size': round(stat.st_size / 1048576, 1), 'mtime': int(stat.st_mtime)})
         except Exception as e:
             self.send_json(500, {'error': str(e)}); return
         self.send_json(200, {'files': files, 'dir': str(DATA.resolve())})
@@ -94,33 +115,26 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         except Exception:
             self.send_json(400, {'error': 'Invalid JSON'}); return
 
-        name = req.get('name', '')
+        name = Path(req.get('name', '')).name
         pages = req.get('pages', {})
+        layouts = req.get('layouts', {})
 
-        # 清理文件名：取纯文件名，去除路径
-        name = Path(name).name
-
-        print(f'[zhubi] Save request: name="{name}", pages={len(pages)}')
+        print(f'[zhubi] Save: name="{name}", pages={len(pages)}, layouts={len(layouts)}')
 
         if not name or not pages:
             self.send_json(400, {'error': 'Missing data'}); return
 
-        # 在 /app/data/ 中查找文件
         pdf_path = DATA / name
-        print(f'[zhubi] Looking for: {pdf_path} (exists={pdf_path.exists()})')
-
         if not pdf_path.exists():
-            # 尝试模糊匹配
-            candidates = list(DATA.glob('*.pdf'))
-            print(f'[zhubi] Available PDFs: {[c.name for c in candidates]}')
             self.send_json(404, {'error': f'PDF not found: {name}'}); return
 
         base = Path(name).stem
 
-        # 保存校对文本
-        json_path = DATA / f'{base}_pages.json'
+        # 保存含布局的 JSON
+        embed_data = {'pages': pages, 'layouts': layouts}
+        json_path = DATA / f'{base}_embed.json'
         with open(json_path, 'w', encoding='utf-8') as f:
-            json.dump(pages, f, ensure_ascii=False, indent=2)
+            json.dump(embed_data, f, ensure_ascii=False)
 
         # 进度文件
         progress_path = DATA / f'{base}_progress.json'
@@ -131,11 +145,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
         out_path = DATA / f'{base}_embedded.pdf'
         embed = BASE / 'embed_text.py'
-        cmd = [
-            sys.executable, str(embed),
-            str(pdf_path), str(json_path), str(out_path),
-            '--progress', str(progress_path)
-        ]
+        cmd = [sys.executable, str(embed), str(pdf_path), str(json_path), str(out_path), '--progress', str(progress_path)]
 
         try:
             r = subprocess.run(cmd, capture_output=True, text=True, timeout=600, cwd=str(BASE))
@@ -156,7 +166,6 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if not out_path.exists():
             self.send_json(500, {'error': 'Output not created'}); return
 
-        # 覆盖原文件
         shutil.copy2(out_path, pdf_path)
         out_path.unlink()
         if json_path.exists(): json_path.unlink()
@@ -182,7 +191,6 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 if __name__ == '__main__':
     print(f'[zhubi] http://0.0.0.0:{PORT}')
     print(f'[zhubi] data: {DATA.resolve()}')
-    # 启动时列出已有 PDF
     pdfs = list(DATA.glob('*.pdf'))
     if pdfs:
         print(f'[zhubi] Found {len(pdfs)} PDF(s):')
