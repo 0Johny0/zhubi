@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-embed_text.py — 删除旧层 + 用旧坐标写入校对文本
+embed_text.py — 删除旧层 + 用 pdfjsLib 坐标写入校对文本
 """
 
 import sys, json, io, os, re, platform, subprocess, traceback
@@ -40,7 +40,6 @@ def load_font(font_name, fp):
                 return True
             except Exception:
                 continue
-        print(f'Font FAIL: {fp}')
         return False
     try:
         pdfmetrics.registerFont(TTFont(font_name, fp))
@@ -51,69 +50,8 @@ def load_font(font_name, fp):
         return False
 
 
-def get_old_y_positions(page):
-    """提取旧文字层每行的 y 坐标，从上到下排序"""
-    y_set = set()
-
-    # 方法 1: pypdf visitor API
-    try:
-        def visitor(text, cm, tm, font_dict, font_size):
-            if text.strip():
-                y = round(float(tm[5]), 1)
-                if 0 < y < 5000:
-                    y_set.add(y)
-        page.extract_text(visitor_text=visitor)
-        if len(y_set) > 3:
-            return sorted(y_set, reverse=True)
-    except Exception:
-        pass
-
-    # 方法 2: 正则解析 content stream
-    try:
-        from pypdf.generic import ArrayObject
-        contents = page.get('/Contents')
-        if contents is None:
-            return []
-
-        streams = []
-        if isinstance(contents, ArrayObject):
-            for ref in contents:
-                try: streams.append(ref.get_object().get_data())
-                except: pass
-        else:
-            obj = contents.get_object() if hasattr(contents, 'get_object') else contents
-            try: streams.append(obj.get_data())
-            except: return []
-
-        for data in streams:
-            text = data.decode('latin-1', errors='replace')
-            cur_y = None
-            for line in text.split('\n'):
-                line = line.strip()
-                # Tm: a b c d tx ty
-                m = re.match(r'[\d.\-]+ +[\d.\-]+ +[\d.\-]+ +[\d.\-]+ +[\d.\-]+ +([\d.\-]+)\s+Tm', line)
-                if m:
-                    cur_y = float(m.group(1))
-                    if 0 < cur_y < 5000: y_set.add(round(cur_y, 1))
-                    continue
-                # Td: dx dy
-                m2 = re.match(r'([\d.\-]+) +([\d.\-]+)\s+Td', line)
-                if m2 and cur_y is not None:
-                    cur_y += float(m2.group(2))
-                    if 0 < cur_y < 5000: y_set.add(round(cur_y, 1))
-                    continue
-                # TD: dx dy
-                m3 = re.match(r'([\d.\-]+) +([\d.\-]+)\s+TD', line)
-                if m3 and cur_y is not None:
-                    cur_y += float(m3.group(2))
-                    if 0 < cur_y < 5000: y_set.add(round(cur_y, 1))
-    except Exception:
-        pass
-
-    return sorted(y_set, reverse=True) if y_set else []
-
-
 def strip_text_from_page(page):
+    """删除页面所有文字绘制指令（BT...ET 块）"""
     try:
         contents = page['/Contents']
     except KeyError:
@@ -140,7 +78,7 @@ def _strip_stream(stream):
 
 def main():
     if len(sys.argv) < 4:
-        print('Usage: embed_text.py <input.pdf> <pages.json> <output.pdf> [--progress path]', file=sys.stderr)
+        print('Usage: embed_text.py <input.pdf> <data.json> <output.pdf> [--progress path]', file=sys.stderr)
         sys.exit(1)
 
     pdf_path, json_path, output_path = sys.argv[1], sys.argv[2], sys.argv[3]
@@ -176,8 +114,17 @@ def main():
         print('ERROR: No usable CJK font', file=sys.stderr); sys.exit(1)
 
     with open(json_path, 'r', encoding='utf-8') as f:
-        text_data = json.load(f)
-    print(f'Pages to embed: {len(text_data)}')
+        embed_data = json.load(f)
+
+    # 兼容两种 JSON 格式
+    if isinstance(embed_data, dict) and 'pages' in embed_data:
+        text_data = embed_data['pages']
+        layout_data = embed_data.get('layouts', {})
+    else:
+        text_data = embed_data
+        layout_data = {}
+
+    print(f'Pages to embed: {len(text_data)}, with layout: {len(layout_data)}')
 
     def write_progress(done, total, finished=False):
         if not progress_path: return
@@ -189,7 +136,7 @@ def main():
 
     reader = PdfReader(pdf_path)
 
-    # 深拷贝，确保每页独立（防止修改一页影响其他页）
+    # 深拷贝：每页独立，修改一页不影响其他页
     writer = PdfWriter()
     writer.clone_document_from_reader(reader)
 
@@ -199,74 +146,81 @@ def main():
 
     for i, page in enumerate(writer.pages):
         pn = str(i + 1)
-        if pn in text_data and text_data[pn].strip():
-            try:
-                mb = page.mediabox
-                w, h = float(mb.width), float(mb.height)
+        if pn not in text_data or not text_data[pn].strip():
+            continue
 
-                # ① 删除前提取旧层 y 坐标
-                old_y = get_old_y_positions(page)
+        try:
+            mb = page.mediabox
+            pw, ph = float(mb.width), float(mb.height)
 
-                # ② 删除旧文字层
-                strip_text_from_page(page)
+            # 删除旧文字层
+            strip_text_from_page(page)
 
-                # ③ 校对文本按行写入
-                new_lines = [l for l in text_data[pn].split('\n') if l.strip()]
-                if not new_lines:
-                    done += 1; continue
+            # 取布局数据（pdfjsLib 提供的坐标）
+            layout = layout_data.get(pn, [])
 
-                fs = min(12, (h - 80) / max(len(new_lines), 1) / 2.0)
+            # 校对文本按行拆分
+            new_lines = [l for l in text_data[pn].split('\n') if l.strip()]
+            if not new_lines:
+                done += 1; continue
+
+            # 确定字号：优先用布局数据
+            if layout:
+                avg_fs = sum(l.get('fs', 10) for l in layout) / len(layout)
+                fs = min(12, max(6, avg_fs))
+            else:
+                fs = min(12, (ph - 80) / max(len(new_lines), 1) / 2.0)
                 fs = max(6, fs)
-                lh = fs * 2.0
 
-                # 判断是否使用旧坐标：坐标数量 >= 行数的 30%
-                use_old = len(old_y) >= len(new_lines) * 0.3
+            pkt = io.BytesIO()
+            c = canvas.Canvas(pkt, pagesize=(pw, ph))
+            c.setFont(font_name, fs)
+            max_chars = int((pw - 80) / fs * 1.6)
 
-                pkt = io.BytesIO()
-                c = canvas.Canvas(pkt, pagesize=(w, h))
-                c.setFont(font_name, fs)
-                max_chars = int((w - 80) / fs * 1.6)
+            for idx, line in enumerate(new_lines):
+                s = line.strip()
+                if not s:
+                    continue
 
-                for idx, line in enumerate(new_lines):
-                    s = line.strip()
-                    if not s: continue
+                # y 坐标：使用布局数据
+                if layout and idx < len(layout):
+                    y = layout[idx]['y']
+                elif layout:
+                    # 多余行在最后一行下方递减
+                    y = layout[-1]['y'] - (idx - len(layout) + 1) * fs * 2.0
+                else:
+                    # 无布局数据 fallback
+                    y = ph - 40 - idx * fs * 2.0
 
-                    # 确定 y 坐标
-                    if use_old and idx < len(old_y):
-                        y = old_y[idx]
-                    elif use_old:
-                        y = old_y[-1] - (idx - len(old_y) + 1) * lh
-                    else:
-                        y = h - 40 - idx * lh
+                if y < 20:
+                    break
 
-                    if y < 20: break
+                c.setFillColorRGB(0, 0, 0, alpha=0)
+                sub_y = y
+                while len(s) > max_chars:
+                    c.drawString(40, sub_y, s[:max_chars])
+                    s = s[max_chars:]
+                    sub_y -= fs * 1.3
+                    if sub_y < 20: break
+                if sub_y >= 20 and s:
+                    c.drawString(40, sub_y, s)
 
-                    c.setFillColorRGB(0, 0, 0, alpha=0)
-                    sub_y = y
-                    while len(s) > max_chars:
-                        c.drawString(40, sub_y, s[:max_chars])
-                        s = s[max_chars:]
-                        sub_y -= fs * 1.3
-                        if sub_y < 20: break
-                    if sub_y >= 20 and s:
-                        c.drawString(40, sub_y, s)
+            c.save()
+            pkt.seek(0)
+            page.merge_page(PdfReader(pkt).pages[0])
+            done += 1
 
-                c.save()
-                pkt.seek(0)
-                page.merge_page(PdfReader(pkt).pages[0])
-                done += 1
+            coord_src = f'layout({len(layout)})' if layout else 'fallback'
+            if done % 10 == 0 or done == total_pages:
+                write_progress(done, total_pages)
+                print(f'  Progress: {done}/{total_pages} coords={coord_src}')
 
-                if done % 10 == 0 or done == total_pages:
-                    write_progress(done, total_pages)
-                    coord_src = f'old({len(old_y)})' if use_old else 'fallback'
-                    print(f'  Progress: {done}/{total_pages} coords={coord_src}')
-
-            except Exception as e:
-                print(f'  Page {pn} error: {e}')
-                traceback.print_exc()
-                done += 1
-                if done % 10 == 0:
-                    write_progress(done, total_pages)
+        except Exception as e:
+            print(f'  Page {pn} error: {e}')
+            traceback.print_exc()
+            done += 1
+            if done % 10 == 0:
+                write_progress(done, total_pages)
 
     try:
         writer.compress_identical_objects(remove_duplicates=True, remove_unreferenced=True)
