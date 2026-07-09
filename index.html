@@ -15,8 +15,9 @@
   <div class="toolbar-brand">朱笔<small>校对台</small></div>
   <div class="tb-sep"></div>
   <div class="tb-group">
-    <button class="btn" id="btnPdf">📄 加载PDF</button>
+    <button class="btn" id="btnPdf">📄 打开</button>
     <input type="file" id="pdfInput" class="file-input" accept=".pdf">
+    <button class="btn btn--sm" id="btnFileList" title="浏览服务器文件" style="display:none">📂 文件库</button>
   </div>
   <div class="tb-sep sep-pg" style="display:none"></div>
   <div class="tb-group pg-ctrl" id="pgCtrl" style="display:none">
@@ -54,7 +55,7 @@
   <div class="tb-group" id="saveGrp" style="display:none">
     <button class="btn" id="btnMarker">📌 标记</button>
     <button class="btn btn--accent" id="btnWriteBack" style="display:none" title="将校对文本写回 PDF 并刷新">💾 写回PDF</button>
-    <button class="btn" id="btnExportJson" title="导出 JSON（离线可用 embed_text.py）">📦 JSON</button>
+    <button class="btn" id="btnExportJson" title="导出 JSON">📦 JSON</button>
     <button class="btn" id="btnSave">导出 .typ</button>
   </div>
 </header>
