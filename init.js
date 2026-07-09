@@ -46,11 +46,10 @@ document.addEventListener('mouseup', function () {
   if (resizing) { resizing = false; if (el.resizer) el.resizer.classList.remove('active'); document.body.style.cursor = ''; document.body.style.userSelect = ''; }
 });
 
-/* ---- 工具栏 ---- */
-if (el.pdfInput) el.pdfInput.addEventListener('change', function (e) { if (e.target.files[0]) loadPDF(e.target.files[0]); e.target.value = ''; });
-
+/* ---- 工具栏按钮绑定（安全版）---- */
 var _btn = function (id, fn) { var b = $(id); if (b) b.addEventListener('click', fn); };
 
+if (el.pdfInput) el.pdfInput.addEventListener('change', function (e) { if (e.target.files[0]) loadPDF(e.target.files[0]); e.target.value = ''; });
 _btn('btnPdf', function () { if (el.pdfInput) el.pdfInput.click(); });
 _btn('btnPrev', function () { go(-1); });
 _btn('btnNext', function () { go(1); });
@@ -62,7 +61,7 @@ if (el.pgInput) el.pgInput.addEventListener('change', function () {
 
 _btn('btnZin', function () { zoomTo(S.scale + 0.2); });
 _btn('btnZout', function () { zoomTo(S.scale - 0.2); });
-_btn('btnFit', async function () { await fitWidth(); zoomTo(S.scale); });
+_btn('btnFit', function () { fitWidth().then(function () { zoomTo(S.scale); }); });
 _btn('btnTZin', function () { setTextZoom(S.textScale + 0.1); });
 _btn('btnTZout', function () { setTextZoom(S.textScale - 0.1); });
 _btn('btnTFit', function () { setTextZoom(1); });
@@ -84,6 +83,8 @@ _btn('btnSync', function () {
 });
 
 /* ---- 编辑器事件 ---- */
+var _edScrollTimer;
+
 if (el.editor) {
   var _inputRebuildTimer;
   el.editor.addEventListener('input', function () {
@@ -191,7 +192,7 @@ async function loadFileList() {
 
     el.fpBody.querySelectorAll('.fp-item').forEach(function (item) {
       item.addEventListener('click', function () {
-        el.filePicker.style.display = 'none';
+        if (el.filePicker) el.filePicker.style.display = 'none';
         loadPDF('/data/' + encodeURIComponent(item.dataset.name));
       });
     });
@@ -227,4 +228,13 @@ async function detectServer() {
 
 /* ---- 启动 ---- */
 initDrop(el.dzPdf, el.pdfInput, /\.pdf$/i, loadPDF);
-initToolbar(); initCapture(); restore(); detectServer();
+
+try { initToolbar(); } catch (e) { console.error('[zhubi] initToolbar:', e); }
+try { initCapture(); } catch (e) { console.error('[zhubi] initCapture:', e); }
+try { restore(); } catch (e) { console.error('[zhubi] restore:', e); }
+
+setTimeout(function () {
+  detectServer().catch(function (e) { console.error('[zhubi] detectServer:', e); });
+}, 200);
+
+console.log('[zhubi] init complete');
