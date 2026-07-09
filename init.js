@@ -1,5 +1,5 @@
 /* ================================================================
-   init.js — 事件绑定、拖放、分栏、服务器检测、启动
+   init.js — 事件绑定、拖放、分栏、文件列表、服务器检测、启动
    ================================================================ */
 
 function initDrop(zone, input, accept, handler) {
@@ -16,6 +16,7 @@ function initDrop(zone, input, accept, handler) {
   zone.addEventListener('click', function () { input.click(); });
 }
 
+/* ---- 分栏拖拽 ---- */
 var splitDrag = false, resizing = false;
 el.splitHandle.addEventListener('mousedown', function (e) {
   splitDrag = true; document.body.style.cursor = 'row-resize';
@@ -42,6 +43,7 @@ document.addEventListener('mouseup', function () {
   if (resizing) { resizing = false; el.resizer.classList.remove('active'); document.body.style.cursor = ''; document.body.style.userSelect = ''; }
 });
 
+/* ---- 工具栏 ---- */
 el.pdfInput.addEventListener('change', function (e) { if (e.target.files[0]) loadPDF(e.target.files[0]); e.target.value = ''; });
 $('btnPdf').addEventListener('click', function () { el.pdfInput.click(); });
 $('btnPrev').addEventListener('click', function () { go(-1); });
@@ -71,6 +73,49 @@ $('btnSync').addEventListener('click', function () {
   toast(S.syncOn ? '同步已开启' : '同步已关闭');
 });
 
+/* ---- 文件列表 ---- */
+async function loadFileList() {
+  if (!S.serverOk) return;
+  el.fpBody.innerHTML = '<div class="fp-empty">加载中…</div>';
+  try {
+    var resp = await fetch('/api/files');
+    var data = await resp.json();
+    if (data.error) { el.fpBody.innerHTML = '<div class="fp-empty">' + data.error + '</div>'; return; }
+    if (!data.files.length) {
+      el.fpBody.innerHTML = '<div class="fp-empty">📂 /app/data/ 下没有 PDF 文件</div>';
+      return;
+    }
+    var html = '';
+    for (var i = 0; i < data.files.length; i++) {
+      var f = data.files[i];
+      var date = new Date(f.mtime * 1000);
+      var ds = (date.getMonth() + 1) + '/' + date.getDate() + ' ' +
+               date.getHours().toString().padStart(2, '0') + ':' +
+               date.getMinutes().toString().padStart(2, '0');
+      html += '<div class="fp-item" data-name="' + f.name + '">' +
+              '<span class="fp-name">📄 ' + f.name + '</span>' +
+              '<span class="fp-size">' + f.size + ' MB</span>' +
+              '<span class="fp-date">' + ds + '</span></div>';
+    }
+    el.fpBody.innerHTML = html;
+    el.fpBody.querySelectorAll('.fp-item').forEach(function (item) {
+      item.addEventListener('click', function () {
+        el.filePicker.style.display = 'none';
+        loadPDF('/data/' + encodeURIComponent(item.dataset.name));
+      });
+    });
+  } catch (e) { el.fpBody.innerHTML = '<div class="fp-empty">获取失败</div>'; }
+}
+
+function showFilePicker() {
+  el.filePicker.style.display = '';
+  loadFileList();
+}
+
+$('btnFileList').addEventListener('click', showFilePicker);
+$('fpClose').addEventListener('click', function () { el.filePicker.style.display = 'none'; });
+
+/* ---- 编辑器事件 ---- */
 var _inputRebuildTimer;
 el.editor.addEventListener('input', function () {
   updateMeta(); save(); schedulePreview(); clearHighlights();
@@ -122,6 +167,7 @@ document.addEventListener('keydown', function (e) {
   if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); saveAndReload(); }
 });
 
+/* ---- 面板拖放 ---- */
 el.pdfPanel.addEventListener('dragover', function (e) { e.preventDefault(); });
 el.pdfPanel.addEventListener('drop', function (e) {
   e.preventDefault();
@@ -139,6 +185,7 @@ el.textPanel.addEventListener('drop', function (e) {
 
 el.dzTxt.addEventListener('click', function () { el.pdfInput.click(); });
 
+/* ---- 服务器检测 ---- */
 async function detectServer() {
   try {
     var resp = await fetch('/api/status', { signal: AbortSignal.timeout(1500) });
@@ -146,13 +193,16 @@ async function detectServer() {
     if (data.ok) {
       S.serverOk = true;
       el.btnWriteBack.style.display = '';
+      el.btnFileList.style.display = '';
       toast('已连接本地服务');
     }
   } catch (e) {
     S.serverOk = false;
     el.btnWriteBack.style.display = 'none';
+    el.btnFileList.style.display = 'none';
   }
 }
 
+/* ---- 启动 ---- */
 initDrop(el.dzPdf, el.pdfInput, /\.pdf$/i, loadPDF);
 initToolbar(); initCapture(); restore(); detectServer();
