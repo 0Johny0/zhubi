@@ -14,12 +14,21 @@ DATA.mkdir(exist_ok=True)
 
 
 class Handler(http.server.SimpleHTTPRequestHandler):
+
+    def handle_one_request(self):
+        try:
+            super().handle_one_request()
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            pass
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(BASE), **kwargs)
 
     def do_GET(self):
         if self.path == '/api/status':
             self.send_json(200, {'ok': True, 'dir': str(DATA.resolve())})
+        elif self.path == '/api/files':
+            self.handle_file_list()
         else:
             super().do_GET()
 
@@ -37,6 +46,21 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.send_header('Access-Control-Allow-Methods', 'GET,POST,OPTIONS')
         self.send_header('Access-Control-Allow-Headers', 'Content-Type')
         self.end_headers()
+
+    def handle_file_list(self):
+        files = []
+        try:
+            for f in sorted(DATA.iterdir()):
+                if f.suffix.lower() == '.pdf' and f.is_file():
+                    stat = f.stat()
+                    files.append({
+                        'name': f.name,
+                        'size': round(stat.st_size / 1048576, 1),
+                        'mtime': int(stat.st_mtime)
+                    })
+        except Exception as e:
+            self.send_json(500, {'error': str(e)}); return
+        self.send_json(200, {'files': files, 'dir': str(DATA.resolve())})
 
     def handle_upload(self):
         name = parse_qs(urlparse(self.path).query).get('name', ['file.pdf'])[0]
@@ -62,47 +86,45 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
         pdf_path = DATA / name
         if not pdf_path.exists():
-            self.send_json(404, {'error': 'PDF not found: ' + str(pdf_path)}); return
+            self.send_json(404, {'error': 'PDF not found: ' + name}); return
 
         base = Path(name).stem
-
         json_path = DATA / f'{base}_pages.json'
         with open(json_path, 'w', encoding='utf-8') as f:
             json.dump(pages, f, ensure_ascii=False, indent=2)
-        print(f'[zhubi] JSON saved: {json_path} ({len(pages)} pages)')
+        print(f'[zhubi] JSON: {json_path.name} ({len(pages)} pages)')
 
         out_path = DATA / f'{base}_embedded.pdf'
         embed = BASE / 'embed_text.py'
-
-        if not embed.exists():
-            self.send_json(500, {'error': 'embed_text.py not found at: ' + str(embed)}); return
-
         cmd = [sys.executable, str(embed), str(pdf_path), str(json_path), str(out_path)]
-        print(f'[zhubi] Running: {" ".join(cmd)}')
 
         try:
-            r = subprocess.run(cmd, capture_output=True, text=True, timeout=300, cwd=str(BASE))
-            print(f'[zhubi] Return code: {r.returncode}')
-            if r.stdout: print(f'[zhubi] stdout: {r.stdout}')
-            if r.stderr: print(f'[zhubi] stderr: {r.stderr}')
-
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=600, cwd=str(BASE))
+            if r.stdout:
+                for line in r.stdout.strip().split('\n')[-5:]:
+                    print(f'[zhubi]   {line}')
+            if r.stderr:
+                for line in r.stderr.strip().split('\n')[-3:]:
+                    print(f'[zhubi]   ERR: {line}')
             if r.returncode != 0:
-                error_detail = r.stderr.strip() or r.stdout.strip() or 'Unknown error'
-                self.send_json(500, {'error': 'Embed failed: ' + error_detail, 'log': r.stdout})
-                return
+                error = r.stderr.strip() or r.stdout.strip() or 'Unknown error'
+                self.send_json(500, {'error': error}); return
         except subprocess.TimeoutExpired:
-            self.send_json(500, {'error': 'Timeout (300s)'}); return
+            self.send_json(500, {'error': 'Timeout (600s)'}); return
         except Exception as e:
-            self.send_json(500, {'error': 'Subprocess error: ' + str(e)}); return
+            self.send_json(500, {'error': str(e)}); return
 
         if not out_path.exists():
-            self.send_json(500, {'error': 'Output PDF was not created by embed_text.py'}); return
+            self.send_json(500, {'error': 'Output not created'}); return
 
         shutil.copy2(out_path, pdf_path)
         out_path.unlink()
-        print(f'[zhubi] PDF updated: {pdf_path}')
+        if json_path.exists():
+            json_path.unlink()
 
-        self.send_json(200, {'ok': True, 'url': f'/data/{name}', 'log': r.stdout})
+        size_mb = pdf_path.stat().st_size / 1048576
+        print(f'[zhubi] Done: {name} ({size_mb:.1f} MB)')
+        self.send_json(200, {'ok': True, 'url': f'/data/{name}'})
 
     def send_json(self, code, data):
         body = json.dumps(data, ensure_ascii=False).encode()
