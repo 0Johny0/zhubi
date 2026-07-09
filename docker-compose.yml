@@ -9,7 +9,5 @@ services:
       - "8321:8321"
     volumes:
       - ./data:/app/data
-      # 如需访问 NAS 上的 PDF，挂载 NAS 目录：
-      # - /volume1/documents:/app/data:rw
     environment:
       - TZ=Asia/Shanghai
