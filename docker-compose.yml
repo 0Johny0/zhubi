@@ -11,3 +11,5 @@ services:
       - ./data:/app/data
     environment:
       - TZ=Asia/Shanghai
+      - PUID=1000
+      - PGID=1000
