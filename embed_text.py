@@ -1,79 +1,84 @@
 #!/usr/bin/env python3
 """
-embed_text.py — 将校对文本写入扫描 PDF（生成可搜索 PDF）
+embed_text.py — 删除原文字层 + 写入校对文本（生成可搜索 PDF）
 """
 
-import sys, json, io, os, platform, subprocess, traceback
+import sys, json, io, os, re, platform, subprocess, traceback
 
 
 def find_fonts():
     s = platform.system()
     if s == 'Linux':
-        # 优先独立 .ttf，避免 .ttc 兼容问题
-        preferred = [
-            '/usr/share/fonts/zhubi/NotoSansSC-Regular.ttf',
-        ]
+        preferred = ['/usr/share/fonts/zhubi/NotoSansSC-Regular.ttf']
         for fp in preferred:
             if os.path.exists(fp):
                 return [fp]
-
-        # fc-list 查找独立 .ttf（排除 .ttc）
         try:
-            r = subprocess.run(
-                ['fc-list', ':lang=zh', 'file'],
-                capture_output=True, text=True, timeout=5
-            )
+            r = subprocess.run(['fc-list', ':lang=zh', 'file'], capture_output=True, text=True, timeout=5)
             if r.returncode == 0 and r.stdout.strip():
-                ttf_only = []
-                ttc_fallback = []
+                ttf_only, ttc_fallback = [], []
                 for line in r.stdout.strip().split('\n'):
                     fp = line.split(':')[0].strip()
                     if fp and os.path.exists(fp):
-                        if fp.lower().endswith('.ttf') or fp.lower().endswith('.otf'):
-                            ttf_only.append(fp)
-                        elif fp.lower().endswith('.ttc'):
-                            ttc_fallback.append(fp)
-                if ttf_only:
-                    print(f'fc-list found {len(ttf_only)} .ttf CJK fonts')
-                    return ttf_only
-                if ttc_fallback:
-                    print(f'fc-list found {len(ttc_fallback)} .ttc CJK fonts (fallback)')
-                    return ttc_fallback
+                        (ttf_only if fp.lower().endswith(('.ttf', '.otf')) else ttc_fallback).append(fp)
+                return ttf_only if ttf_only else ttc_fallback
         except Exception:
             pass
-
     if s == 'Darwin':
-        return ['/System/Library/Fonts/PingFang.ttc',
-                '/System/Library/Fonts/STHeiti Light.ttc']
-
-    return ['C:/Windows/Fonts/msyh.ttc',
-            'C:/Windows/Fonts/simsun.ttc']
+        return ['/System/Library/Fonts/PingFang.ttc', '/System/Library/Fonts/STHeiti Light.ttc']
+    return ['C:/Windows/Fonts/msyh.ttc', 'C:/Windows/Fonts/simsun.ttc']
 
 
 def load_font(font_name, fp):
     from reportlab.pdfbase import pdfmetrics
     from reportlab.pdfbase.ttfonts import TTFont
-
-    # .ttc 需要 subfontIndex
     if fp.lower().endswith('.ttc'):
         for idx in range(12):
             try:
                 pdfmetrics.registerFont(TTFont(font_name, fp, subfontIndex=idx))
-                print(f'Font OK: {fp} (subfontIndex={idx})')
+                print(f'Font OK: {fp} (sub={idx})')
                 return True
             except Exception:
                 continue
-        print(f'Font FAIL: {fp} (all subfontIndex exhausted)')
         return False
-
-    # .ttf / .otf 直接加载
     try:
         pdfmetrics.registerFont(TTFont(font_name, fp))
-        print(f'Font OK: {fp}')
+        print(f'Font OK: {pdf}')
         return True
     except Exception as e:
         print(f'Font FAIL: {fp} -> {e}')
         return False
+
+
+def strip_text_from_page(page):
+    """从页面内容流中删除所有文字操作（BT...ET），保留图片和图形"""
+    try:
+        contents = page['/Contents']
+    except KeyError:
+        return
+
+    from pypdf.generic import ArrayObject
+
+    if isinstance(contents, ArrayObject):
+        for ref in contents:
+            _strip_stream(ref.get_object())
+    else:
+        obj = contents.get_object() if hasattr(contents, 'get_object') else contents
+        _strip_stream(obj)
+
+
+def _strip_stream(stream):
+    """从单个内容流中删除 BT...ET 块"""
+    try:
+        data = stream.get_data()
+        text = data.decode('latin-1', errors='replace')
+        # BT = Begin Text, ET = End Text，删除所有文字对象
+        cleaned = re.sub(r'\bBT\b.*?\bET\b', '', text, flags=re.DOTALL)
+        # 清理多余空行
+        cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
+        stream.set_data(cleaned.encode('latin-1'))
+    except Exception as e:
+        print(f'  Strip stream warning: {e}')
 
 
 def main():
@@ -88,9 +93,9 @@ def main():
     print(f'Output: {output_path}')
 
     if not os.path.exists(pdf_path):
-        print(f'ERROR: PDF not found: {pdf_path}', file=sys.stderr); sys.exit(1)
+        print(f'ERROR: PDF not found', file=sys.stderr); sys.exit(1)
     if not os.path.exists(json_path):
-        print(f'ERROR: JSON not found: {json_path}', file=sys.stderr); sys.exit(1)
+        print(f'ERROR: JSON not found', file=sys.stderr); sys.exit(1)
 
     try:
         from reportlab.pdfgen import canvas
@@ -98,23 +103,19 @@ def main():
     except ImportError as e:
         print(f'ERROR: {e}', file=sys.stderr); sys.exit(1)
 
+    # 注册字体
     font_name = 'ZhFont'
-    candidates = find_fonts()
-    print(f'Font candidates: {candidates}')
-
     font_found = False
-    for fp in candidates:
-        if load_font(font_name, fp):
+    for fp in find_fonts():
+        if fp and os.path.exists(fp) and load_font(font_name, fp):
             font_found = True
             break
-
     if not font_found:
-        print('ERROR: No usable CJK font', file=sys.stderr)
-        sys.exit(1)
+        print('ERROR: No usable CJK font', file=sys.stderr); sys.exit(1)
 
     with open(json_path, 'r', encoding='utf-8') as f:
         text_data = json.load(f)
-    print(f'Pages: {len(text_data)}')
+    print(f'Pages to embed: {len(text_data)}')
 
     reader = PdfReader(pdf_path)
     writer = PdfWriter()
@@ -124,6 +125,11 @@ def main():
         pn = str(i + 1)
         if pn in text_data and text_data[pn].strip():
             try:
+                # ① 删除原有文字层（保留图片）
+                strip_text_from_page(page)
+                print(f'  Page {pn}: text layer stripped')
+
+                # ② 创建校对文本叠加层
                 mb = page.mediabox
                 w, h = float(mb.width), float(mb.height)
                 lines = text_data[pn].split('\n')
@@ -153,10 +159,13 @@ def main():
 
                 c.save()
                 pkt.seek(0)
+
+                # ③ 合并：图片 + 新文字
                 page.merge_page(PdfReader(pkt).pages[0])
                 done += 1
+                print(f'  Page {pn}: overlay merged')
             except Exception as e:
-                print(f'  Page {i+1}: {e}')
+                print(f'  Page {pn} error: {e}')
                 traceback.print_exc()
 
         writer.add_page(page)
@@ -164,7 +173,8 @@ def main():
     with open(output_path, 'wb') as f:
         writer.write(f)
 
-    print(f'Done: {done}/{len(reader.pages)} pages, {os.path.getsize(output_path)/1048576:.1f} MB')
+    size_mb = os.path.getsize(output_path) / 1048576
+    print(f'Done: {done}/{len(reader.pages)} pages, {size_mb:.1f} MB')
 
 
 if __name__ == '__main__':
