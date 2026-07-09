@@ -55,7 +55,7 @@
   <div class="tb-group" id="saveGrp" style="display:none">
     <button class="btn" id="btnMarker">📌 标记</button>
     <button class="btn btn--accent" id="btnWriteBack" style="display:none" title="将校对文本写回 PDF 并刷新">💾 写回PDF</button>
-    <button class="btn" id="btnExportJson" title="导出 JSON">📦 JSON</button>
+    <button class="btn" id="btnExportJson" title="导出 JSON（离线可用 embed_text.py）">📦 JSON</button>
     <button class="btn" id="btnSave">导出 .typ</button>
   </div>
 </header>
@@ -66,7 +66,7 @@
     <div class="dropzone" id="dzPdf">
       <div class="dropzone-icon">📑</div>
       <div class="dropzone-title">加载扫描版 PDF</div>
-      <div class="dropzone-sub">拖放文件至此，或点击选择 · 支持含文本层的 PDF</div>
+      <div class="dropzone-sub">拖放文件至此，或点击选择 · 也可点击「📂 文件库」浏览</div>
     </div>
     <div class="pdf-viewport" id="pdfVp" style="display:none">
       <div class="pdf-scroll-wrap" id="scrollWrap"></div>
@@ -125,6 +125,16 @@
     </div>
   </section>
 </main>
+
+<div class="file-picker" id="filePicker" style="display:none">
+  <div class="fp-header">
+    <span>📂 文件库</span>
+    <button class="btn btn--sm" id="fpClose">✕</button>
+  </div>
+  <div class="fp-body" id="fpBody">
+    <div class="fp-empty">加载中…</div>
+  </div>
+</div>
 
 <footer class="statusbar">
   <div><kbd>←</kbd><kbd>→</kbd> 翻页 · <kbd>Ctrl</kbd>+滚轮 缩放 · <kbd>Ctrl</kbd>+<kbd>S</kbd> 写回PDF · <kbd>Esc</kbd> 退出截取</div>
