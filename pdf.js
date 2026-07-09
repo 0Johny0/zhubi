@@ -1,18 +1,17 @@
-/* ================================================================
-   pdf.js — PDF 加载、渲染、缩放、提取、截取、高亮、写回
-   ================================================================ */
-
 async function loadPDF(fileOrUrl, skipExtract) {
   try {
     var buf, name;
     if (typeof fileOrUrl === 'string') {
       var resp = await fetch(fileOrUrl);
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
       buf = await resp.arrayBuffer();
       name = decodeURIComponent(fileOrUrl.split('/').pop().split('?')[0]);
     } else {
       buf = await fileOrUrl.arrayBuffer();
       name = fileOrUrl.name;
     }
+
+    console.log('[zhubi] loadPDF:', name, typeof fileOrUrl === 'string' ? '(server)' : '(local)');
 
     S.pdf = await pdfjsLib.getDocument({ data: buf }).promise;
     S.total = S.pdf.numPages; S.pg = 1; S.fname = name;
@@ -47,19 +46,27 @@ async function loadPDF(fileOrUrl, skipExtract) {
     if (S.serverOk && typeof fileOrUrl !== 'string') {
       uploadPDFToServer(fileOrUrl);
     }
-  } catch (e) { toast('PDF 加载失败: ' + e.message); }
+  } catch (e) {
+    console.error('[zhubi] loadPDF error:', e);
+    toast('PDF 加载失败: ' + e.message);
+  }
 }
 
 async function uploadPDFToServer(file) {
   try {
     var buf = await file.arrayBuffer();
-    await fetch('/api/upload-pdf?name=' + encodeURIComponent(file.name), { method: 'POST', body: buf });
-  } catch (e) { }
+    var resp = await fetch('/api/upload-pdf?name=' + encodeURIComponent(file.name), { method: 'POST', body: buf });
+    var data = await resp.json();
+    console.log('[zhubi] upload:', data);
+  } catch (e) {
+    console.error('[zhubi] upload error:', e);
+  }
 }
 
 async function saveAndReload() {
   if (!S.serverOk) { toast('请先启动 python server.py'); return; }
   if (!S.pageMap || !S.pageMap.length) { toast('需要先完成页码映射'); return; }
+  if (S._writing) { toast('正在写入中，请勿重复操作'); return; }
 
   var pages = {};
   for (var i = 0; i < S.pageMap.length; i++) {
@@ -67,9 +74,40 @@ async function saveAndReload() {
     var text = el.editor.value.substring(r.textStart, r.textEnd).trim();
     if (text) pages[String(r.page)] = text;
   }
-  if (!Object.keys(pages).length) { toast('没有可写入的文本'); return; }
+  var pageCount = Object.keys(pages).length;
+  if (!pageCount) { toast('没有可写入的文本'); return; }
 
-  toast('正在写入 PDF…'); status('写入中…');
+  console.log('[zhubi] saveAndReload:', S.fname, pageCount, 'pages');
+
+  /* 锁定 */
+  S._writing = true;
+  var overlay = $('progressOverlay');
+  var bar = $('progressBar');
+  var title = $('progressTitle');
+  var detail = $('progressDetail');
+  if (el.btnWriteBack) el.btnWriteBack.disabled = true;
+  if (overlay) overlay.style.display = '';
+  if (bar) bar.style.width = '0%';
+  if (title) title.textContent = '正在写入 PDF…';
+  if (detail) detail.textContent = '共 ' + pageCount + ' 页，准备中…';
+
+  var beforeUnload = function (e) { e.preventDefault(); e.returnValue = ''; };
+  window.addEventListener('beforeunload', beforeUnload);
+
+  /* 轮询进度 */
+  var pollTimer = setInterval(async function () {
+    try {
+      var resp = await fetch('/api/progress');
+      var data = await resp.json();
+      if (data.done !== undefined && data.total) {
+        var pct = Math.round(data.done / data.total * 100);
+        if (bar) bar.style.width = pct + '%';
+        if (detail) detail.textContent = '第 ' + data.done + ' / ' + data.total + ' 页';
+      }
+      if (data.finished) clearInterval(pollTimer);
+    } catch (e) { }
+  }, 500);
+
   try {
     var resp = await fetch('/api/save', {
       method: 'POST',
@@ -77,16 +115,37 @@ async function saveAndReload() {
       body: JSON.stringify({ name: S.fname, pages: pages })
     });
     var data = await resp.json();
-    if (data.error) { toast('错误: ' + data.error); status('写入失败'); return; }
+    console.log('[zhubi] save result:', data);
 
-    toast('正在刷新 PDF…');
-    var pdfResp = await fetch(data.url + '?t=' + Date.now());
+    clearInterval(pollTimer);
+
+    if (data.error) {
+      if (title) title.textContent = '写入失败';
+      if (detail) detail.textContent = data.error;
+      toast('错误: ' + data.error);
+      setTimeout(function () { if (overlay) overlay.style.display = 'none'; }, 4000);
+      S._writing = false;
+      if (el.btnWriteBack) el.btnWriteBack.disabled = false;
+      window.removeEventListener('beforeunload', beforeUnload);
+      return;
+    }
+
+    /* 写入成功 → 重新加载 PDF + 重新提取文本 */
+    if (title) title.textContent = '正在刷新并验证…';
+    if (bar) bar.style.width = '100%';
+    if (detail) detail.textContent = '重新加载 PDF…';
+
+    /* 重新加载（不清空编辑器） */
+    var pdfUrl = data.url + '?t=' + Date.now();
+    var pdfResp = await fetch(pdfUrl);
+    if (!pdfResp.ok) throw new Error('PDF reload failed: HTTP ' + pdfResp.status);
     var buf = await pdfResp.arrayBuffer();
     var scrollPos = el.pdfVp.scrollTop;
 
     S.pdf = await pdfjsLib.getDocument({ data: buf }).promise;
     S.pageTexts = await cachePageTexts();
 
+    /* 清除已渲染 canvas，触发重新渲染 */
     for (var j = 0; j < pageSlots.length; j++) {
       pageSlots[j].dataset.rendered = '';
       var cv = pageSlots[j].querySelector('canvas');
@@ -95,12 +154,47 @@ async function saveAndReload() {
     el.pdfVp.scrollTop = scrollPos;
     renderSlot(S.pg);
 
-    status('写入完成 · ' + Object.keys(pages).length + ' 页');
-    toast('PDF 已更新');
+    /* 重新提取文本层以验证 */
+    if (detail) detail.textContent = '正在提取验证…';
+    var oldText = el.editor.value;
+    var newExtracted = await extractTextLayer();
+
+    if (newExtracted) {
+      /* 对比校验 */
+      var oldLines = oldText.split('\n').filter(function (l) { return l.trim(); }).length;
+      var newLines = newExtracted.split('\n').filter(function (l) { return l.trim(); }).length;
+      console.log('[zhubi] verify: old lines=' + oldLines + ', new lines=' + newLines);
+
+      /* 更新编辑器为提取后的内容 */
+      el.editor.value = newExtracted;
+      updateMeta(); rebuildMap(); schedulePreview();
+
+      if (title) title.textContent = '写入完成 ✓';
+      if (detail) detail.textContent = '已验证: ' + newLines + ' 行文本已写入';
+      status('写入完成 · ' + pageCount + ' 页 · 已验证');
+      toast('PDF 已更新并验证');
+    } else {
+      if (title) title.textContent = '写入完成';
+      if (detail) detail.textContent = '但未提取到文本层';
+      status('写入完成 · ' + pageCount + ' 页');
+      toast('PDF 已更新（无文本层）');
+    }
+
+    setTimeout(function () { if (overlay) overlay.style.display = 'none'; }, 1500);
+
   } catch (e) {
+    clearInterval(pollTimer);
+    console.error('[zhubi] saveAndReload error:', e);
+    if (title) title.textContent = '连接失败';
+    if (detail) detail.textContent = e.message;
     toast('连接失败: ' + e.message);
     status('请确保 server.py 正在运行');
+    setTimeout(function () { if (overlay) overlay.style.display = 'none'; }, 4000);
   }
+
+  S._writing = false;
+  if (el.btnWriteBack) el.btnWriteBack.disabled = false;
+  window.removeEventListener('beforeunload', beforeUnload);
 }
 
 function exportTextData() {
