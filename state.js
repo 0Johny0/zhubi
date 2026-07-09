@@ -1,7 +1,3 @@
-/* ================================================================
-   state.js — 全局状态、DOM 引用、通用工具
-   ================================================================ */
-
 if (typeof pdfjsLib !== 'undefined') {
   pdfjsLib.GlobalWorkerOptions.workerSrc =
     'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
@@ -43,9 +39,12 @@ var el = {
   toast: $('toast'), statusR: $('statusR'),
   resizer: $('resizer'), pdfPanel: $('pdfPanel'), textPanel: $('textPanel'),
   modeGrp: $('modeGrp'),
-  btnWriteBack: $('btnWriteBack'), btnExportJson: $('btnExportJson'),
+  btnWriteBack: $('btnWriteBack'),
+  btnExportJson: $('btnExportJson'),
   btnFileList: $('btnFileList'),
-  filePicker: $('filePicker'), fpBody: $('fpBody'), fpClose: $('fpClose'),
+  filePicker: $('filePicker'),
+  fpBody: $('fpBody'),
+  fpClose: $('fpClose'),
   sepPg: document.querySelector('.sep-pg'),
   sepCap: document.querySelector('.sep-cap'),
   sepSync: document.querySelector('.sep-sync'),
@@ -54,10 +53,11 @@ var el = {
 
 var toastT;
 function toast(m) {
+  if (!el.toast) return;
   el.toast.textContent = m; el.toast.classList.add('show');
   clearTimeout(toastT); toastT = setTimeout(function () { el.toast.classList.remove('show'); }, 2200);
 }
-function status(m) { el.statusR.textContent = m; }
+function status(m) { if (el.statusR) el.statusR.textContent = m; }
 
 var SAVE_KEY = 'zhubi_pref_v4';
 function save() {
@@ -71,7 +71,7 @@ function restore() {
 }
 
 el.editorArea.className = 'editor-area mode-source';
-var _sb = el.modeGrp.querySelector('[data-mode="source"]');
-var _xb = el.modeGrp.querySelector('[data-mode="split"]');
+var _sb = el.modeGrp ? el.modeGrp.querySelector('[data-mode="source"]') : null;
+var _xb = el.modeGrp ? el.modeGrp.querySelector('[data-mode="split"]') : null;
 if (_sb) _sb.classList.add('active');
 if (_xb) _xb.classList.remove('active');
