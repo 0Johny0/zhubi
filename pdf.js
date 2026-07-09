@@ -15,7 +15,7 @@ async function loadPDF(fileOrUrl, skipExtract) {
 
     S.pdf = await pdfjsLib.getDocument({ data: buf }).promise;
     S.total = S.pdf.numPages; S.pg = 1; S.fname = name;
-    S.savedPageTexts = null; // 重置
+    S.savedPageTexts = null;
 
     el.dzPdf.style.display = 'none'; el.pdfVp.style.display = 'block';
     el.pgCtrl.style.display = 'flex'; el.sepPg.style.display = '';
@@ -42,8 +42,7 @@ async function loadPDF(fileOrUrl, skipExtract) {
     }
 
     rebuildMap();
-    storeSavedTexts(); // 记录已保存状态
-
+    storeSavedTexts();
     status('已加载 ' + name + ' · ' + S.total + ' 页' + (S.hasTextLayer ? ' · 含文本层' : ''));
 
     if (S.serverOk && typeof fileOrUrl !== 'string') {
@@ -77,12 +76,10 @@ function storeSavedTexts() {
 function getChangedPages() {
   var changed = {}, layouts = {};
   if (!S.pageMap || !S.pageMap.length) return { pages: changed, layouts: layouts };
-
   for (var i = 0; i < S.pageMap.length; i++) {
     var r = S.pageMap[i];
     var current = el.editor.value.substring(r.textStart, r.textEnd).trim();
     var saved = (S.savedPageTexts && S.savedPageTexts[r.page]) || '';
-
     if (current && current !== saved) {
       changed[String(r.page)] = current;
       var layout = getPageLayout(r.page);
@@ -97,32 +94,21 @@ function getPageLayout(pageNum) {
   if (!S.pageContentItems) return null;
   var pageData = S.pageContentItems[pageNum - 1];
   if (!pageData || !pageData.items.length) return null;
-
   var items = pageData.items;
   var lineMap = [];
   for (var i = 0; i < items.length; i++) {
-    var it = items[i];
-    var y = it.y;
-    var found = false;
+    var it = items[i], y = it.y, found = false;
     for (var j = 0; j < lineMap.length; j++) {
       if (Math.abs(lineMap[j].y - y) < (it.h || 4) * 0.5) {
-        lineMap[j].fs_sum += (it.h || 4);
-        lineMap[j].count++;
-        found = true;
-        break;
+        lineMap[j].fs_sum += (it.h || 4); lineMap[j].count++; found = true; break;
       }
     }
     if (!found) lineMap.push({ y: y, fs_sum: (it.h || 4), count: 1 });
   }
-
   lineMap.sort(function (a, b) { return b.y - a.y; });
-
   var layout = [];
   for (var k = 0; k < lineMap.length; k++) {
-    layout.push({
-      y: Math.round(lineMap[k].y * 10) / 10,
-      fs: Math.round(lineMap[k].fs_sum / lineMap[k].count * 10) / 10
-    });
+    layout.push({ y: Math.round(lineMap[k].y * 10) / 10, fs: Math.round(lineMap[k].fs_sum / lineMap[k].count * 10) / 10 });
   }
   return layout;
 }
@@ -133,12 +119,9 @@ async function saveAndReload() {
   if (!S.pageMap || !S.pageMap.length) { toast('需要先完成页码映射'); return; }
   if (S._writing) { toast('正在写入中，请勿重复操作'); return; }
 
-  // 只取变更页
   var diff = getChangedPages();
-  var pages = diff.pages;
-  var layouts = diff.layouts;
+  var pages = diff.pages, layouts = diff.layouts;
   var pageCount = Object.keys(pages).length;
-
   if (!pageCount) { toast('没有变更内容'); return; }
 
   console.log('[zhubi] saveAndReload:', S.fname, pageCount, 'changed pages');
@@ -178,7 +161,6 @@ async function saveAndReload() {
     });
     var data = await resp.json();
     console.log('[zhubi] save result:', data);
-
     clearInterval(pollTimer);
 
     if (data.error) {
@@ -192,7 +174,7 @@ async function saveAndReload() {
       return;
     }
 
-    // 刷新 PDF
+    /* 刷新 PDF */
     if (title) title.textContent = '正在刷新…';
     if (bar) bar.style.width = '100%';
     if (detail) detail.textContent = '重新加载 PDF…';
@@ -206,21 +188,28 @@ async function saveAndReload() {
     S.pdf = await pdfjsLib.getDocument({ data: buf }).promise;
     S.pageTexts = await cachePageTexts();
 
+    /* 清除渲染标记，让 observer 重新渲染所有可见页 */
     for (var j = 0; j < pageSlots.length; j++) {
       pageSlots[j].dataset.rendered = '';
-      var cv = pageSlots[j].querySelector('canvas');
-      if (cv) { cv.width = 0; cv.height = 0; }
     }
-    el.pdfVp.scrollTop = scrollPos;
-    renderSlot(S.pg);
-    rebuildMap();
-    storeSavedTexts(); // 更新已保存状态
 
-    if (title) title.textContent = '写入完成 ✓';
-    if (detail) detail.textContent = '已更新 ' + pageCount + ' 页';
-    status('写入完成 · ' + pageCount + ' 页');
-    toast('PDF 已更新');
-    setTimeout(function () { if (overlay) overlay.style.display = 'none'; }, 1500);
+    /* 重建 observer（自动触发可见页渲染） */
+    setupPageObserver();
+
+    /* 恢复滚动位置 */
+    el.pdfVp.scrollTop = scrollPos;
+
+    /* 等待渲染完成后更新状态 */
+    setTimeout(function () {
+      rebuildMap();
+      storeSavedTexts();
+
+      if (title) title.textContent = '写入完成 ✓';
+      if (detail) detail.textContent = '已更新 ' + pageCount + ' 页';
+      status('写入完成 · ' + pageCount + ' 页');
+      toast('PDF 已更新');
+      setTimeout(function () { if (overlay) overlay.style.display = 'none'; }, 1500);
+    }, 500);
 
   } catch (e) {
     clearInterval(pollTimer);
@@ -391,6 +380,7 @@ function calcPage() {
   for (var i = 0; i < pageDims.length; i++) { if (c >= pageDims[i].top + pageDims[i].sh / 2) p = i + 2; }
   return Math.min(p, S.total);
 }
+
 function updatePgOverlay() { el.pgOverlay.textContent = '第 ' + S.pg + ' / ' + S.total + ' 页'; }
 
 var scrollRAF;
@@ -424,6 +414,7 @@ async function fitWidth() {
   var p = await S.pdf.getPage(1);
   S.scale = Math.max(0.25, (el.pdfVp.clientWidth - 56) / p.getViewport({ scale: 1 }).width);
 }
+
 function zoomTo(ns) {
   var old = S.scale, ratio = ns / old;
   var st = el.pdfVp.scrollTop, vh = el.pdfVp.clientHeight, ctr = st + vh / 2;
@@ -440,6 +431,7 @@ function toggleCapture() {
   el.capBadge.classList.toggle('show', S.captureMode);
   toast(S.captureMode ? '截取模式已开启' : '已退出截取模式');
 }
+
 function initCapture() {
   var ov = el.captureLayer, rect = el.captureRect;
   ov.addEventListener('mousedown', function (e) {
@@ -465,6 +457,7 @@ function initCapture() {
     if (w < 10 || h < 10) return; doCapture(x1, y1, w, h);
   });
 }
+
 function doCapture(cx, cy, cw, ch) {
   for (var i = 0; i < pageDims.length; i++) {
     var d = pageDims[i];
