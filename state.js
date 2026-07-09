@@ -44,6 +44,8 @@ var el = {
   resizer: $('resizer'), pdfPanel: $('pdfPanel'), textPanel: $('textPanel'),
   modeGrp: $('modeGrp'),
   btnWriteBack: $('btnWriteBack'), btnExportJson: $('btnExportJson'),
+  btnFileList: $('btnFileList'),
+  filePicker: $('filePicker'), fpBody: $('fpBody'), fpClose: $('fpClose'),
   sepPg: document.querySelector('.sep-pg'),
   sepCap: document.querySelector('.sep-cap'),
   sepSync: document.querySelector('.sep-sync'),
