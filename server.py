@@ -40,7 +40,6 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
     def handle_upload(self):
         name = parse_qs(urlparse(self.path).query).get('name', ['file.pdf'])[0]
-        # 安全：只保留文件名，防止路径穿越
         name = Path(name).name
         length = int(self.headers.get('Content-Length', 0))
         body = self.rfile.read(length)
@@ -100,7 +99,6 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.wfile.write(body)
 
     def log_message(self, format, *args):
-        # Docker 日志友好格式
         sys.stderr.write(f"[zhubi] {args[0]}\n")
 
 
