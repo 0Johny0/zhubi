@@ -8,63 +8,72 @@ import sys, json, io, os, platform, subprocess, traceback
 
 def find_fonts():
     s = platform.system()
-    if s == 'Darwin':
-        return ['/System/Library/Fonts/PingFang.ttc',
-                '/System/Library/Fonts/STHeiti Light.ttc',
-                '/System/Library/Fonts/Hiragino Sans GB.ttc']
     if s == 'Linux':
+        # 优先独立 .ttf，避免 .ttc 兼容问题
+        preferred = [
+            '/usr/share/fonts/zhubi/NotoSansSC-Regular.ttf',
+        ]
+        for fp in preferred:
+            if os.path.exists(fp):
+                return [fp]
+
+        # fc-list 查找独立 .ttf（排除 .ttc）
         try:
             r = subprocess.run(
                 ['fc-list', ':lang=zh', 'file'],
                 capture_output=True, text=True, timeout=5
             )
             if r.returncode == 0 and r.stdout.strip():
-                found = []
+                ttf_only = []
+                ttc_fallback = []
                 for line in r.stdout.strip().split('\n'):
                     fp = line.split(':')[0].strip()
                     if fp and os.path.exists(fp):
-                        found.append(fp)
-                if found:
-                    print(f'fc-list found {len(found)} CJK fonts')
-                    return found
+                        if fp.lower().endswith('.ttf') or fp.lower().endswith('.otf'):
+                            ttf_only.append(fp)
+                        elif fp.lower().endswith('.ttc'):
+                            ttc_fallback.append(fp)
+                if ttf_only:
+                    print(f'fc-list found {len(ttf_only)} .ttf CJK fonts')
+                    return ttf_only
+                if ttc_fallback:
+                    print(f'fc-list found {len(ttc_fallback)} .ttc CJK fonts (fallback)')
+                    return ttc_fallback
         except Exception:
             pass
 
-        return [
-            '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc',
-            '/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc',
-            '/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc',
-            '/usr/share/fonts/truetype/wqy/wqy-microhei.ttc',
-            '/usr/share/fonts/wqy-microhei/wqy-microhei.ttc',
-        ]
+    if s == 'Darwin':
+        return ['/System/Library/Fonts/PingFang.ttc',
+                '/System/Library/Fonts/STHeiti Light.ttc']
 
     return ['C:/Windows/Fonts/msyh.ttc',
-            'C:/Windows/Fonts/simsun.ttc',
-            'C:/Windows/Fonts/simhei.ttf']
+            'C:/Windows/Fonts/simsun.ttc']
 
 
 def load_font(font_name, fp):
-    """尝试加载字体，.ttc 文件尝试多个 subfontIndex"""
     from reportlab.pdfbase import pdfmetrics
     from reportlab.pdfbase.ttfonts import TTFont
 
+    # .ttc 需要 subfontIndex
     if fp.lower().endswith('.ttc'):
-        for idx in range(10):
+        for idx in range(12):
             try:
                 pdfmetrics.registerFont(TTFont(font_name, fp, subfontIndex=idx))
                 print(f'Font OK: {fp} (subfontIndex={idx})')
                 return True
             except Exception:
                 continue
+        print(f'Font FAIL: {fp} (all subfontIndex exhausted)')
         return False
-    else:
-        try:
-            pdfmetrics.registerFont(TTFont(font_name, fp))
-            print(f'Font OK: {fp}')
-            return True
-        except Exception as e:
-            print(f'Font skip: {fp} -> {e}')
-            return False
+
+    # .ttf / .otf 直接加载
+    try:
+        pdfmetrics.registerFont(TTFont(font_name, fp))
+        print(f'Font OK: {fp}')
+        return True
+    except Exception as e:
+        print(f'Font FAIL: {fp} -> {e}')
+        return False
 
 
 def main():
@@ -74,41 +83,38 @@ def main():
 
     pdf_path, json_path, output_path = sys.argv[1], sys.argv[2], sys.argv[3]
 
-    print(f'Input PDF: {pdf_path}')
-    print(f'JSON:      {json_path}')
-    print(f'Output:    {output_path}')
+    print(f'Input:  {pdf_path}')
+    print(f'JSON:   {json_path}')
+    print(f'Output: {output_path}')
 
     if not os.path.exists(pdf_path):
-        print(f'ERROR: PDF not found: {pdf_path}', file=sys.stderr)
-        sys.exit(1)
+        print(f'ERROR: PDF not found: {pdf_path}', file=sys.stderr); sys.exit(1)
     if not os.path.exists(json_path):
-        print(f'ERROR: JSON not found: {json_path}', file=sys.stderr)
-        sys.exit(1)
+        print(f'ERROR: JSON not found: {json_path}', file=sys.stderr); sys.exit(1)
 
     try:
         from reportlab.pdfgen import canvas
         from pypdf import PdfReader, PdfWriter
     except ImportError as e:
-        print(f'ERROR: Missing dependency: {e}', file=sys.stderr)
-        sys.exit(1)
+        print(f'ERROR: {e}', file=sys.stderr); sys.exit(1)
 
-    # 注册字体
     font_name = 'ZhFont'
+    candidates = find_fonts()
+    print(f'Font candidates: {candidates}')
+
     font_found = False
-    for fp in find_fonts():
-        if not fp or not os.path.exists(fp):
-            continue
+    for fp in candidates:
         if load_font(font_name, fp):
             font_found = True
             break
 
     if not font_found:
-        print('ERROR: No CJK font found. Install: apt install fonts-noto-cjk', file=sys.stderr)
+        print('ERROR: No usable CJK font', file=sys.stderr)
         sys.exit(1)
 
     with open(json_path, 'r', encoding='utf-8') as f:
         text_data = json.load(f)
-    print(f'Pages to embed: {len(text_data)}')
+    print(f'Pages: {len(text_data)}')
 
     reader = PdfReader(pdf_path)
     writer = PdfWriter()
@@ -120,7 +126,6 @@ def main():
             try:
                 mb = page.mediabox
                 w, h = float(mb.width), float(mb.height)
-
                 lines = text_data[pn].split('\n')
                 fs = min(12, (h - 80) / max(len(lines), 1) / 2.0)
                 fs = max(6, fs)
@@ -129,24 +134,19 @@ def main():
                 pkt = io.BytesIO()
                 c = canvas.Canvas(pkt, pagesize=(w, h))
                 c.setFont(font_name, fs)
-
                 y = h - 40
                 max_chars = int((w - 80) / fs * 1.6)
 
                 for line in lines:
-                    if y < 30:
-                        break
+                    if y < 30: break
                     s = line.strip()
                     if not s:
-                        y -= lh * 0.4
-                        continue
+                        y -= lh * 0.4; continue
                     c.setFillColorRGB(0, 0, 0, alpha=0)
                     while len(s) > max_chars:
                         c.drawString(40, y, s[:max_chars])
-                        s = s[max_chars:]
-                        y -= lh
-                        if y < 30:
-                            break
+                        s = s[max_chars:]; y -= lh
+                        if y < 30: break
                     if y >= 30 and s:
                         c.drawString(40, y, s)
                     y -= lh
@@ -156,7 +156,7 @@ def main():
                 page.merge_page(PdfReader(pkt).pages[0])
                 done += 1
             except Exception as e:
-                print(f'  Page {i+1} error: {e}')
+                print(f'  Page {i+1}: {e}')
                 traceback.print_exc()
 
         writer.add_page(page)
@@ -164,8 +164,7 @@ def main():
     with open(output_path, 'wb') as f:
         writer.write(f)
 
-    size_mb = os.path.getsize(output_path) / 1048576
-    print(f'Done: {done}/{len(reader.pages)} pages, {size_mb:.1f} MB')
+    print(f'Done: {done}/{len(reader.pages)} pages, {os.path.getsize(output_path)/1048576:.1f} MB')
 
 
 if __name__ == '__main__':
