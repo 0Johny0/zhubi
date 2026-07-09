@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-embed_text.py — 删除原文字层 + 写入校对文本（生成可搜索 PDF）
+embed_text.py — 在原文字层上叠加校对文本（保留原始位置用于高亮同步）
 """
 
 import sys, json, io, os, re, platform, subprocess, traceback
@@ -51,31 +51,6 @@ def load_font(font_name, fp):
         return False
 
 
-def strip_text_from_page(page):
-    try:
-        contents = page['/Contents']
-    except KeyError:
-        return
-    from pypdf.generic import ArrayObject
-    if isinstance(contents, ArrayObject):
-        for ref in contents:
-            _strip_stream(ref.get_object())
-    else:
-        obj = contents.get_object() if hasattr(contents, 'get_object') else contents
-        _strip_stream(obj)
-
-
-def _strip_stream(stream):
-    try:
-        data = stream.get_data()
-        text = data.decode('latin-1', errors='replace')
-        cleaned = re.sub(r'\bBT\b.*?\bET\b', '', text, flags=re.DOTALL)
-        cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
-        stream.set_data(cleaned.encode('latin-1'))
-    except Exception as e:
-        print(f'  Strip warning: {e}')
-
-
 def main():
     if len(sys.argv) < 4:
         print('Usage: embed_text.py <input.pdf> <pages.json> <output.pdf> [--progress path]', file=sys.stderr)
@@ -90,10 +65,7 @@ def main():
             progress_path = sys.argv[idx + 1]
 
     print(f'Input:  {pdf_path}')
-    print(f'JSON:   {json_path}')
     print(f'Output: {output_path}')
-    if progress_path:
-        print(f'Progress: {progress_path}')
 
     if not os.path.exists(pdf_path):
         print(f'ERROR: PDF not found', file=sys.stderr); sys.exit(1)
@@ -108,8 +80,6 @@ def main():
 
     font_name = 'ZhFont'
     candidates = find_fonts()
-    print(f'Font candidates: {candidates}')
-
     font_found = False
     for fp in candidates:
         if fp and os.path.exists(fp) and load_font(font_name, fp):
@@ -132,7 +102,6 @@ def main():
 
     reader = PdfReader(pdf_path)
     writer = PdfWriter()
-
     for page in reader.pages:
         writer.add_page(page)
 
@@ -144,8 +113,6 @@ def main():
         pn = str(i + 1)
         if pn in text_data and text_data[pn].strip():
             try:
-                strip_text_from_page(page)
-
                 mb = page.mediabox
                 w, h = float(mb.width), float(mb.height)
                 lines = text_data[pn].split('\n')
@@ -175,6 +142,9 @@ def main():
 
                 c.save()
                 pkt.seek(0)
+
+                # 直接叠加，不删除旧文字层
+                # 旧文字层保留原始坐标 → 高亮同步不失准
                 page.merge_page(PdfReader(pkt).pages[0])
                 done += 1
 
@@ -188,7 +158,7 @@ def main():
                 if done % 10 == 0:
                     write_progress(done, total_pages)
 
-    # 压缩：安全调用，失败不影响输出
+    # 压缩：安全调用
     try:
         writer.compress_identical_objects(
             remove_duplicates=True,
@@ -197,13 +167,6 @@ def main():
         print('Compressed OK')
     except Exception as e:
         print(f'Compress skipped: {e}')
-        # 备选：只做基础压缩
-        try:
-            for page in writer.pages:
-                page.compress_content_streams()
-            print('Content streams compressed')
-        except Exception as e2:
-            print(f'Stream compress skipped: {e2}')
 
     with open(output_path, 'wb') as f:
         writer.write(f)
