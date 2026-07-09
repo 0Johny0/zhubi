@@ -13,7 +13,6 @@ def find_fonts():
                 '/System/Library/Fonts/STHeiti Light.ttc',
                 '/System/Library/Fonts/Hiragino Sans GB.ttc']
     if s == 'Linux':
-        # 先用 fc-list 找系统已安装的中文字体
         try:
             r = subprocess.run(
                 ['fc-list', ':lang=zh', 'file'],
@@ -31,23 +30,41 @@ def find_fonts():
         except Exception:
             pass
 
-        # fc-list 失败则硬编码常见路径
         return [
-            '/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc',
             '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc',
+            '/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc',
             '/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc',
-            '/usr/share/fonts/truetype/noto/NotoSansCJKsc-Regular.otf',
-            '/usr/share/fonts/opentype/noto/NotoSansCJKsc-Regular.otf',
-            '/usr/share/fonts/noto-cjk/NotoSansCJKsc-Regular.otf',
             '/usr/share/fonts/truetype/wqy/wqy-microhei.ttc',
             '/usr/share/fonts/wqy-microhei/wqy-microhei.ttc',
-            '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
-            '/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc',
         ]
 
     return ['C:/Windows/Fonts/msyh.ttc',
             'C:/Windows/Fonts/simsun.ttc',
             'C:/Windows/Fonts/simhei.ttf']
+
+
+def load_font(font_name, fp):
+    """尝试加载字体，.ttc 文件尝试多个 subfontIndex"""
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
+
+    if fp.lower().endswith('.ttc'):
+        for idx in range(10):
+            try:
+                pdfmetrics.registerFont(TTFont(font_name, fp, subfontIndex=idx))
+                print(f'Font OK: {fp} (subfontIndex={idx})')
+                return True
+            except Exception:
+                continue
+        return False
+    else:
+        try:
+            pdfmetrics.registerFont(TTFont(font_name, fp))
+            print(f'Font OK: {fp}')
+            return True
+        except Exception as e:
+            print(f'Font skip: {fp} -> {e}')
+            return False
 
 
 def main():
@@ -70,34 +87,23 @@ def main():
 
     try:
         from reportlab.pdfgen import canvas
-        from reportlab.pdfbase import pdfmetrics
-        from reportlab.pdfbase.ttfonts import TTFont
         from pypdf import PdfReader, PdfWriter
     except ImportError as e:
         print(f'ERROR: Missing dependency: {e}', file=sys.stderr)
-        print('Install: pip install reportlab pypdf', file=sys.stderr)
         sys.exit(1)
 
     # 注册字体
     font_name = 'ZhFont'
     font_found = False
-    candidates = find_fonts()
-
-    for fp in candidates:
+    for fp in find_fonts():
         if not fp or not os.path.exists(fp):
             continue
-        try:
-            pdfmetrics.registerFont(TTFont(font_name, fp))
-            print(f'Font OK: {fp}')
+        if load_font(font_name, fp):
             font_found = True
             break
-        except Exception as e:
-            print(f'Font skip: {fp} -> {e}')
-            continue
 
     if not font_found:
-        print('ERROR: No CJK font found. Install fonts-noto-cjk or pass --font', file=sys.stderr)
-        print(f'Searched: {candidates}', file=sys.stderr)
+        print('ERROR: No CJK font found. Install: apt install fonts-noto-cjk', file=sys.stderr)
         sys.exit(1)
 
     with open(json_path, 'r', encoding='utf-8') as f:
