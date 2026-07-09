@@ -40,10 +40,11 @@ def load_font(font_name, fp):
                 return True
             except Exception:
                 continue
+        print(f'Font FAIL: {fp} (all subfontIndex exhausted)')
         return False
     try:
         pdfmetrics.registerFont(TTFont(font_name, fp))
-        print(f'Font OK: {pdf}')
+        print(f'Font OK: {fp}')
         return True
     except Exception as e:
         print(f'Font FAIL: {fp} -> {e}')
@@ -51,14 +52,11 @@ def load_font(font_name, fp):
 
 
 def strip_text_from_page(page):
-    """从页面内容流中删除所有文字操作（BT...ET），保留图片和图形"""
     try:
         contents = page['/Contents']
     except KeyError:
         return
-
     from pypdf.generic import ArrayObject
-
     if isinstance(contents, ArrayObject):
         for ref in contents:
             _strip_stream(ref.get_object())
@@ -68,17 +66,14 @@ def strip_text_from_page(page):
 
 
 def _strip_stream(stream):
-    """从单个内容流中删除 BT...ET 块"""
     try:
         data = stream.get_data()
         text = data.decode('latin-1', errors='replace')
-        # BT = Begin Text, ET = End Text，删除所有文字对象
         cleaned = re.sub(r'\bBT\b.*?\bET\b', '', text, flags=re.DOTALL)
-        # 清理多余空行
         cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
         stream.set_data(cleaned.encode('latin-1'))
     except Exception as e:
-        print(f'  Strip stream warning: {e}')
+        print(f'  Strip warning: {e}')
 
 
 def main():
@@ -103,10 +98,12 @@ def main():
     except ImportError as e:
         print(f'ERROR: {e}', file=sys.stderr); sys.exit(1)
 
-    # 注册字体
     font_name = 'ZhFont'
+    candidates = find_fonts()
+    print(f'Font candidates: {candidates}')
+
     font_found = False
-    for fp in find_fonts():
+    for fp in candidates:
         if fp and os.path.exists(fp) and load_font(font_name, fp):
             font_found = True
             break
@@ -125,11 +122,9 @@ def main():
         pn = str(i + 1)
         if pn in text_data and text_data[pn].strip():
             try:
-                # ① 删除原有文字层（保留图片）
                 strip_text_from_page(page)
-                print(f'  Page {pn}: text layer stripped')
+                print(f'  Page {pn}: stripped')
 
-                # ② 创建校对文本叠加层
                 mb = page.mediabox
                 w, h = float(mb.width), float(mb.height)
                 lines = text_data[pn].split('\n')
@@ -159,11 +154,9 @@ def main():
 
                 c.save()
                 pkt.seek(0)
-
-                # ③ 合并：图片 + 新文字
                 page.merge_page(PdfReader(pkt).pages[0])
                 done += 1
-                print(f'  Page {pn}: overlay merged')
+                print(f'  Page {pn}: merged')
             except Exception as e:
                 print(f'  Page {pn} error: {e}')
                 traceback.print_exc()
@@ -173,8 +166,7 @@ def main():
     with open(output_path, 'wb') as f:
         writer.write(f)
 
-    size_mb = os.path.getsize(output_path) / 1048576
-    print(f'Done: {done}/{len(reader.pages)} pages, {size_mb:.1f} MB')
+    print(f'Done: {done}/{len(reader.pages)} pages, {os.path.getsize(output_path)/1048576:.1f} MB')
 
 
 if __name__ == '__main__':
